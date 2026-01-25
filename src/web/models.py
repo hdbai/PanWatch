@@ -167,12 +167,14 @@ class DataSource(Base):
     __tablename__ = "data_sources"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String, nullable=False)       # "财联社电报"
-    type = Column(String, nullable=False)       # "news" / "chart" / "quote"
-    provider = Column(String, nullable=False)   # "cls" / "eastmoney" / "tencent"
+    name = Column(String, nullable=False)       # "雪球资讯"
+    type = Column(String, nullable=False)       # "news" / "chart" / "quote" / "kline" / "capital_flow"
+    provider = Column(String, nullable=False)   # "xueqiu" / "eastmoney" / "tencent"
     config = Column(JSON, default={})           # 配置参数
     enabled = Column(Boolean, default=True)
     priority = Column(Integer, default=0)       # 越小优先级越高
+    supports_batch = Column(Boolean, default=False)  # 是否支持批量查询
+    test_symbols = Column(JSON, default=[])     # 测试用股票代码列表
     created_at = Column(DateTime, server_default=func.now())
 
 
@@ -202,3 +204,21 @@ class NotifyThrottle(Base):
     stock_symbol = Column(String, nullable=False)
     last_notify_at = Column(DateTime, nullable=False)
     notify_count = Column(Integer, default=1)  # 当日通知次数
+
+
+class AnalysisHistory(Base):
+    """分析历史记录（盘后分析、盘前分析等）"""
+    __tablename__ = "analysis_history"
+    __table_args__ = (
+        UniqueConstraint("agent_name", "stock_symbol", "analysis_date", name="uq_agent_stock_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_name = Column(String, nullable=False)     # "daily_report" / "premarket_outlook"
+    stock_symbol = Column(String, nullable=False)   # 股票代码，"*" 表示全部
+    analysis_date = Column(String, nullable=False)  # 分析日期 "YYYY-MM-DD"
+    title = Column(String, default="")              # 分析标题
+    content = Column(String, nullable=False)        # AI 分析结果
+    raw_data = Column(JSON, default={})             # 原始数据快照
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

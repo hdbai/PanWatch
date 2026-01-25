@@ -1,21 +1,36 @@
 import { useState, useEffect } from 'react'
-import { Plus, Pencil, Trash2, Play, Database, Newspaper, LineChart, TrendingUp } from 'lucide-react'
+import { Pencil, Play, Database, Newspaper, LineChart, TrendingUp, DollarSign, Image, Layers, Check, X, Clock } from 'lucide-react'
 import { fetchAPI, type DataSource } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { useToast } from '@/components/ui/toast'
+
+interface TestLogItem {
+  timestamp: string
+  source_name: string
+  source_type: string
+  action: 'start' | 'success' | 'error'
+  message: string
+  duration_ms: number
+  count: number
+}
 
 interface TestResult {
   success: boolean
-  type: string
-  message: string
-  items?: Array<{ title?: string; name?: string; time?: string; price?: number; change_pct?: number; importance?: number }>
-  image?: string
-  count?: number
+  source_name: string
+  source_type: string
+  type_label: string
+  provider: string
+  supports_batch: boolean
+  test_symbols: string[]
+  count: number
+  duration_ms: number
+  error?: string
+  data?: unknown[] | { image?: string }  // array for most types, object for chart
+  logs: TestLogItem[]
 }
 
 interface DataSourceForm {
@@ -24,30 +39,27 @@ interface DataSourceForm {
   provider: string
   config: Record<string, unknown>
   priority: number
+  supports_batch: boolean
+  test_symbols: string[]
 }
 
 const DATASOURCE_TYPES = {
   news: { label: '新闻资讯', icon: Newspaper, color: 'text-blue-500' },
-  chart: { label: 'K线图表', icon: LineChart, color: 'text-purple-500' },
+  kline: { label: 'K线数据', icon: LineChart, color: 'text-orange-500' },
+  capital_flow: { label: '资金流向', icon: DollarSign, color: 'text-yellow-500' },
   quote: { label: '实时行情', icon: TrendingUp, color: 'text-emerald-500' },
+  chart: { label: 'K线截图', icon: Image, color: 'text-purple-500' },
 }
 
-const PROVIDER_OPTIONS: Record<string, { value: string; label: string }[]> = {
-  news: [
-    { value: 'sina', label: '新浪财经快讯' },
-    { value: 'eastmoney', label: '东方财富公告' },
-  ],
-  chart: [
-    { value: 'xueqiu', label: '雪球' },
-    { value: 'sina', label: '新浪财经' },
-    { value: 'eastmoney', label: '东方财富' },
-  ],
-  quote: [
-    { value: 'tencent', label: '腾讯行情' },
-  ],
+const emptyForm: DataSourceForm = {
+  name: '',
+  type: '',
+  provider: '',
+  config: {},
+  priority: 0,
+  supports_batch: false,
+  test_symbols: [],
 }
-
-const emptyForm: DataSourceForm = { name: '', type: 'news', provider: '', config: {}, priority: 0 }
 
 export default function DataSourcesPage() {
   const [sources, setSources] = useState<DataSource[]>([])
@@ -58,6 +70,7 @@ export default function DataSourcesPage() {
   const [testing, setTesting] = useState<number | null>(null)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   const [testResultOpen, setTestResultOpen] = useState(false)
+  const [testSymbolsInput, setTestSymbolsInput] = useState('')
 
   const { toast } = useToast()
 
@@ -83,46 +96,38 @@ export default function DataSourcesPage() {
         provider: source.provider,
         config: source.config || {},
         priority: source.priority,
+        supports_batch: source.supports_batch || false,
+        test_symbols: source.test_symbols || [],
       })
+      setTestSymbolsInput((source.test_symbols || []).join(', '))
       setEditId(source.id)
     } else {
       setForm(emptyForm)
+      setTestSymbolsInput('')
       setEditId(null)
     }
     setDialogOpen(true)
   }
 
   const saveSource = async () => {
+    if (!editId) return
     try {
+      // Parse test symbols from comma-separated string
+      const testSymbols = testSymbolsInput
+        .split(/[,，\s]+/)
+        .map(s => s.trim())
+        .filter(s => s.length > 0)
+
       const payload = {
-        name: form.name,
-        type: form.type,
-        provider: form.provider,
-        config: form.config,
         priority: form.priority,
-        enabled: true,
+        test_symbols: testSymbols,
       }
-      if (editId) {
-        await fetchAPI(`/datasources/${editId}`, { method: 'PUT', body: JSON.stringify(payload) })
-      } else {
-        await fetchAPI('/datasources', { method: 'POST', body: JSON.stringify(payload) })
-      }
+      await fetchAPI(`/datasources/${editId}`, { method: 'PUT', body: JSON.stringify(payload) })
       setDialogOpen(false)
       load()
-      toast(editId ? '数据源已更新' : '数据源已创建', 'success')
+      toast('设置已保存', 'success')
     } catch (e) {
       toast(e instanceof Error ? e.message : '保存失败', 'error')
-    }
-  }
-
-  const deleteSource = async (id: number) => {
-    if (!confirm('确定删除此数据源？')) return
-    try {
-      await fetchAPI(`/datasources/${id}`, { method: 'DELETE' })
-      load()
-      toast('数据源已删除', 'success')
-    } catch (e) {
-      toast(e instanceof Error ? e.message : '删除失败', 'error')
     }
   }
 
@@ -172,11 +177,8 @@ export default function DataSourcesPage() {
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-[22px] font-bold text-foreground tracking-tight">数据源</h1>
-          <p className="text-[13px] text-muted-foreground mt-1">管理新闻、K线图和行情数据来源</p>
+          <p className="text-[13px] text-muted-foreground mt-1">管理新闻、K线、资金流向和行情数据来源</p>
         </div>
-        <Button onClick={() => openDialog()}>
-          <Plus className="w-4 h-4" /> 添加数据源
-        </Button>
       </div>
 
       <div className="space-y-6">
@@ -195,49 +197,54 @@ export default function DataSourcesPage() {
             ) : (
               <div className="space-y-2">
                 {groupedSources[type].map(source => (
-                  <div
-                    key={source.id}
-                    className="flex items-center justify-between p-3.5 rounded-xl bg-accent/30 hover:bg-accent/50 transition-colors"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <Database className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                      <div className="min-w-0">
-                        <span className="text-[13px] font-medium text-foreground">{source.name}</span>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-[11px] text-muted-foreground font-mono">{source.provider}</span>
-                          <span className="text-[11px] text-muted-foreground">优先级: {source.priority}</span>
+                    <div
+                      key={source.id}
+                      className="flex items-center justify-between p-3.5 rounded-xl bg-accent/30 hover:bg-accent/50 transition-colors"
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <Database className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[13px] font-medium text-foreground">{source.name}</span>
+                            {source.supports_batch && (
+                              <span className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                                <Layers className="w-2.5 h-2.5" />
+                                批量
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            <span className="text-[11px] text-muted-foreground font-mono">{source.provider}</span>
+                            <span className="text-[11px] text-muted-foreground">优先级: {source.priority}</span>
+                            {source.test_symbols?.length > 0 && (
+                              <span className="text-[10px] text-muted-foreground">
+                                测试: {source.test_symbols.slice(0, 3).join(', ')}{source.test_symbols.length > 3 ? '...' : ''}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => testSource(source.id)}
+                          disabled={testing === source.id || !source.enabled}
+                          title="测试连接"
+                        >
+                          {testing === source.id ? (
+                            <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
+                          ) : (
+                            <Play className="w-3.5 h-3.5" />
+                          )}
+                        </Button>
+                        <Switch checked={source.enabled} onCheckedChange={() => toggleEnabled(source)} />
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openDialog(source)} title="设置">
+                          <Pencil className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => testSource(source.id)}
-                        disabled={testing === source.id || !source.enabled}
-                        title="测试连接"
-                      >
-                        {testing === source.id ? (
-                          <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
-                        ) : (
-                          <Play className="w-3.5 h-3.5" />
-                        )}
-                      </Button>
-                      <Switch checked={source.enabled} onCheckedChange={() => toggleEnabled(source)} />
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openDialog(source)}>
-                        <Pencil className="w-3.5 h-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 hover:text-destructive"
-                        onClick={() => deleteSource(source.id)}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
-                    </div>
-                  </div>
                 ))}
               </div>
             )}
@@ -245,68 +252,36 @@ export default function DataSourcesPage() {
         ))}
       </div>
 
-      {/* Dialog */}
+      {/* Edit Dialog - 只允许修改配置项 */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editId ? '编辑数据源' : '添加数据源'}</DialogTitle>
-            <DialogDescription>配置数据采集来源</DialogDescription>
+            <DialogTitle>数据源设置 - {form.name}</DialogTitle>
+            <DialogDescription>{form.provider}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 mt-2">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>优先级 <span className="text-muted-foreground font-normal">(越小越高)</span></Label>
+                <Input
+                  type="number"
+                  value={form.priority}
+                  onChange={e => setForm({ ...form, priority: parseInt(e.target.value) || 0 })}
+                  min={0}
+                />
+              </div>
+            </div>
             <div>
-              <Label>名称</Label>
+              <Label>测试股票代码 <span className="text-muted-foreground font-normal">(逗号分隔)</span></Label>
               <Input
-                value={form.name}
-                onChange={e => setForm({ ...form, name: e.target.value })}
-                placeholder="如 财联社电报"
-              />
-            </div>
-            <div>
-              <Label>类型</Label>
-              <Select
-                value={form.type}
-                onValueChange={val => setForm({ ...form, type: val, provider: '' })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(DATASOURCE_TYPES).map(([key, { label }]) => (
-                    <SelectItem key={key} value={key}>{label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>数据提供商</Label>
-              <Select
-                value={form.provider}
-                onValueChange={val => setForm({ ...form, provider: val })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="选择提供商" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(PROVIDER_OPTIONS[form.type] || []).map(opt => (
-                    <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>优先级 <span className="text-muted-foreground font-normal">(数字越小优先级越高)</span></Label>
-              <Input
-                type="number"
-                value={form.priority}
-                onChange={e => setForm({ ...form, priority: parseInt(e.target.value) || 0 })}
-                min={0}
+                value={testSymbolsInput}
+                onChange={e => setTestSymbolsInput(e.target.value)}
+                placeholder="如 601127, 600519"
               />
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setDialogOpen(false)}>取消</Button>
-              <Button onClick={saveSource} disabled={!form.name || !form.provider}>
-                {editId ? '保存' : '创建'}
-              </Button>
+              <Button onClick={saveSource}>保存</Button>
             </div>
           </div>
         </DialogContent>
@@ -314,51 +289,164 @@ export default function DataSourcesPage() {
 
       {/* Test Result Dialog */}
       <Dialog open={testResultOpen} onOpenChange={setTestResultOpen}>
-        <DialogContent className={testResult?.type === 'chart' ? 'max-w-3xl' : ''}>
+        <DialogContent className="max-w-2xl" onInteractOutside={(e) => e.preventDefault()}>
           <DialogHeader>
-            <DialogTitle>测试结果</DialogTitle>
-            <DialogDescription>{testResult?.message}</DialogDescription>
+            <DialogTitle className="flex items-center gap-2">
+              {testResult?.success ? (
+                <Check className="w-5 h-5 text-emerald-500" />
+              ) : (
+                <X className="w-5 h-5 text-red-500" />
+              )}
+              测试结果 - {testResult?.source_name}
+            </DialogTitle>
+            <DialogDescription>
+              {testResult?.type_label} · {testResult?.provider}
+              {testResult?.supports_batch && ' · 支持批量'}
+            </DialogDescription>
           </DialogHeader>
-          <div className="mt-2">
-            {testResult?.type === 'chart' && testResult.image && (
-              <div className="rounded-lg overflow-hidden border">
-                <img src={testResult.image} alt="K线图截图" className="w-full" />
+
+          <div className="space-y-4 mt-2">
+            {/* Summary */}
+            <div className="flex items-center gap-4 p-3 rounded-lg bg-accent/30">
+              <div className="flex-1">
+                <div className="text-[11px] text-muted-foreground">状态</div>
+                <div className={`text-[13px] font-medium ${testResult?.success ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
+                  {testResult?.success ? '测试成功' : '测试失败'}
+                </div>
+              </div>
+              <div className="flex-1">
+                <div className="text-[11px] text-muted-foreground">数据量</div>
+                <div className="text-[13px] font-medium">{testResult?.count ?? 0} 条</div>
+              </div>
+              <div className="flex-1">
+                <div className="text-[11px] text-muted-foreground">耗时</div>
+                <div className="text-[13px] font-medium">{testResult?.duration_ms ?? 0} ms</div>
+              </div>
+            </div>
+
+            {/* Error message */}
+            {testResult?.error && (
+              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+                <div className="text-[11px] text-red-500 font-medium mb-1">错误信息</div>
+                <div className="text-[12px] text-red-600 dark:text-red-400">{testResult.error}</div>
               </div>
             )}
-            {testResult?.type === 'news' && testResult.items && (
-              <div className="space-y-2 max-h-80 overflow-y-auto">
-                {testResult.items.length === 0 ? (
-                  <p className="text-[13px] text-muted-foreground text-center py-4">暂无数据</p>
-                ) : (
-                  testResult.items.map((item, i) => (
-                    <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-accent/30">
-                      {item.importance !== undefined && item.importance >= 2 && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 flex-shrink-0">
-                          重要
-                        </span>
-                      )}
-                      <span className="text-[12px] text-foreground flex-1">{item.title}</span>
-                      <span className="text-[11px] text-muted-foreground flex-shrink-0">{item.time}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-            {testResult?.type === 'quote' && testResult.items && (
-              <div className="space-y-2">
-                {testResult.items.map((item, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-accent/30">
-                    <span className="text-[13px] font-medium text-foreground">{item.name}</span>
-                    <div className="flex items-center gap-3">
-                      <span className="text-[13px] font-mono">{item.price?.toFixed(2)}</span>
-                      <span className={`text-[12px] font-medium ${
-                        (item.change_pct ?? 0) > 0 ? 'text-red-500' : (item.change_pct ?? 0) < 0 ? 'text-green-500' : 'text-muted-foreground'
+
+            {/* Execution Logs */}
+            {testResult?.logs && testResult.logs.length > 0 && (
+              <div>
+                <div className="text-[12px] font-medium text-foreground mb-2 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5" />
+                  执行日志
+                </div>
+                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                  {testResult.logs.map((log, i) => (
+                    <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-accent/30 text-[11px]">
+                      <span className="text-muted-foreground font-mono flex-shrink-0">{log.timestamp}</span>
+                      <span className={`px-1 py-0.5 rounded text-[10px] flex-shrink-0 ${
+                        log.action === 'start' ? 'bg-blue-500/10 text-blue-500' :
+                        log.action === 'success' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' :
+                        'bg-red-500/10 text-red-500'
                       }`}>
-                        {(item.change_pct ?? 0) > 0 ? '+' : ''}{item.change_pct?.toFixed(2)}%
+                        {log.action === 'start' ? '开始' : log.action === 'success' ? '成功' : '失败'}
                       </span>
+                      <span className="text-foreground flex-1">{log.message}</span>
+                      {log.duration_ms > 0 && (
+                        <span className="text-muted-foreground flex-shrink-0">{log.duration_ms}ms</span>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Data Preview */}
+            {/* Chart type - show image outside scrollable area */}
+            {testResult?.success && testResult.source_type === 'chart' && (testResult.data as {image?: string})?.image && (
+              <div>
+                <div className="text-[12px] font-medium text-foreground mb-2">数据预览</div>
+                <div className="rounded-lg overflow-hidden border">
+                  <img src={(testResult.data as {image: string}).image} alt="K线图截图" className="w-full" />
+                </div>
+              </div>
+            )}
+
+            {/* Other data types - in scrollable container */}
+            {testResult?.success && testResult.data && testResult.source_type !== 'chart' && Array.isArray(testResult.data) && testResult.data.length > 0 && (
+              <div>
+                <div className="text-[12px] font-medium text-foreground mb-2">数据预览</div>
+                <div className="space-y-1.5 max-h-60 overflow-y-auto">
+
+                  {/* News type */}
+                  {testResult.source_type === 'news' && testResult.data.map((item, i) => {
+                    const newsItem = item as { title?: string; time?: string }
+                    return (
+                      <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-accent/30">
+                        <span className="text-[12px] text-foreground flex-1">{newsItem.title}</span>
+                        <span className="text-[11px] text-muted-foreground flex-shrink-0">{newsItem.time}</span>
+                      </div>
+                    )
+                  })}
+
+                  {/* Quote type */}
+                  {testResult.source_type === 'quote' && testResult.data.map((item, i) => {
+                    const quoteItem = item as { symbol?: string; name?: string; price?: number; change_pct?: number }
+                    return (
+                      <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-accent/30">
+                        <span className="text-[12px] font-medium text-foreground">{quoteItem.name || quoteItem.symbol}</span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[12px] font-mono">{quoteItem.price?.toFixed(2)}</span>
+                          <span className={`text-[11px] font-medium ${
+                            (quoteItem.change_pct ?? 0) > 0 ? 'text-red-500' : (quoteItem.change_pct ?? 0) < 0 ? 'text-green-500' : 'text-muted-foreground'
+                          }`}>
+                            {(quoteItem.change_pct ?? 0) > 0 ? '+' : ''}{quoteItem.change_pct?.toFixed(2)}%
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })}
+
+                  {/* Kline type */}
+                  {testResult.source_type === 'kline' && testResult.data.map((item, i) => {
+                    const klineItem = item as { symbol?: string; last_close?: number; trend?: string }
+                    return (
+                      <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-accent/30">
+                        <span className="text-[12px] font-medium text-foreground">{klineItem.symbol}</span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[12px] font-mono">{klineItem.last_close?.toFixed(2)}</span>
+                          <span className="text-[11px] text-muted-foreground">{klineItem.trend}</span>
+                        </div>
+                      </div>
+                    )
+                  })}
+
+                  {/* Capital flow type */}
+                  {testResult.source_type === 'capital_flow' && testResult.data.map((item, i) => {
+                    const flowItem = item as { symbol?: string; name?: string; main_net?: number; main_pct?: number }
+                    return (
+                      <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-accent/30">
+                        <span className="text-[12px] font-medium text-foreground">{flowItem.name || flowItem.symbol}</span>
+                        <div className="flex items-center gap-3">
+                          <span className={`text-[12px] font-mono ${
+                            (flowItem.main_net ?? 0) > 0 ? 'text-red-500' : 'text-green-500'
+                          }`}>
+                            {(flowItem.main_net ?? 0) > 0 ? '+' : ''}{((flowItem.main_net ?? 0) / 10000).toFixed(2)}万
+                          </span>
+                          <span className="text-[11px] text-muted-foreground">
+                            {flowItem.main_pct?.toFixed(2)}%
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Test symbols info */}
+            {testResult?.test_symbols && testResult.test_symbols.length > 0 && (
+              <div className="text-[11px] text-muted-foreground">
+                测试股票: {testResult.test_symbols.join(', ')}
               </div>
             )}
           </div>

@@ -18,6 +18,7 @@ from src.agents.daily_report import DailyReportAgent
 from src.agents.news_digest import NewsDigestAgent
 from src.agents.chart_analyst import ChartAnalystAgent
 from src.agents.intraday_monitor import IntradayMonitorAgent
+from src.agents.premarket_outlook import PremarketOutlookAgent
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,29 @@ def setup_logging():
     root.addHandler(db_handler)
 
 
+def seed_sample_stocks():
+    """首次启动时添加示例股票"""
+    db = SessionLocal()
+    try:
+        # 只在没有任何股票时才添加示例
+        if db.query(Stock).count() > 0:
+            return
+
+        samples = [
+            {"symbol": "600519", "name": "贵州茅台", "market": "CN"},
+            {"symbol": "002594", "name": "比亚迪", "market": "CN"},
+            {"symbol": "300750", "name": "宁德时代", "market": "CN"},
+            {"symbol": "00700", "name": "腾讯控股", "market": "HK"},
+            {"symbol": "AAPL", "name": "苹果", "market": "US"},
+        ]
+        for s in samples:
+            db.add(Stock(**s, enabled=True))
+        db.commit()
+        logger.info("已添加 5 只示例股票（首次启动）")
+    finally:
+        db.close()
+
+
 def seed_agents():
     """初始化内置 Agent 配置"""
     db = SessionLocal()
@@ -107,9 +131,9 @@ def seed_agents():
             "execution_mode": "batch",
         },
         {
-            "name": "morning_brief",
-            "display_name": "开盘前瞻",
-            "description": "每日开盘前分析隔夜外盘和新闻，给出今日关注点",
+            "name": "premarket_outlook",
+            "display_name": "盘前分析",
+            "description": "开盘前综合昨日分析和隔夜信息，展望今日走势",
             "enabled": False,
             "schedule": "0 9 * * 1-5",
             "execution_mode": "batch",
@@ -143,13 +167,29 @@ def seed_data_sources():
     """初始化预置数据源"""
     db = SessionLocal()
     sources = [
+        # 新闻类数据源
         {
-            "name": "新浪财经快讯",
+            "name": "雪球资讯",
             "type": "news",
-            "provider": "sina",
-            "config": {"page_size": 50},
-            "enabled": True,
+            "provider": "xueqiu",
+            "config": {
+                "cookies": "",
+                "description": "雪球个股新闻聚合，需要登录 cookie",
+            },
+            "enabled": False,
             "priority": 0,
+            "supports_batch": True,
+            "test_symbols": ["601127", "600519"],
+        },
+        {
+            "name": "东方财富资讯",
+            "type": "news",
+            "provider": "eastmoney_news",
+            "config": {},
+            "enabled": True,
+            "priority": 1,
+            "supports_batch": False,  # 每只股票单独请求
+            "test_symbols": ["601127", "600519"],
         },
         {
             "name": "东方财富公告",
@@ -157,10 +197,46 @@ def seed_data_sources():
             "provider": "eastmoney",
             "config": {},
             "enabled": True,
-            "priority": 1,
+            "priority": 2,
+            "supports_batch": True,  # 支持批量查询
+            "test_symbols": ["601127", "600519"],
         },
+        # K线数据源
         {
-            "name": "雪球K线",
+            "name": "腾讯K线",
+            "type": "kline",
+            "provider": "tencent",
+            "config": {},
+            "enabled": True,
+            "priority": 0,
+            "supports_batch": False,
+            "test_symbols": ["601127", "600519", "300750"],
+        },
+        # 资金流向数据源
+        {
+            "name": "东方财富资金流",
+            "type": "capital_flow",
+            "provider": "eastmoney",
+            "config": {},
+            "enabled": True,
+            "priority": 0,
+            "supports_batch": False,
+            "test_symbols": ["601127", "600519"],
+        },
+        # 实时行情数据源
+        {
+            "name": "腾讯行情",
+            "type": "quote",
+            "provider": "tencent",
+            "config": {},
+            "enabled": True,
+            "priority": 0,
+            "supports_batch": True,
+            "test_symbols": ["601127", "600519", "300750"],
+        },
+        # K线截图数据源
+        {
+            "name": "雪球K线截图",
             "type": "chart",
             "provider": "xueqiu",
             "config": {
@@ -169,9 +245,11 @@ def seed_data_sources():
             },
             "enabled": True,
             "priority": 0,
+            "supports_batch": False,
+            "test_symbols": ["601127"],
         },
         {
-            "name": "东方财富K线",
+            "name": "东方财富K线截图",
             "type": "chart",
             "provider": "eastmoney",
             "config": {
@@ -180,14 +258,8 @@ def seed_data_sources():
             },
             "enabled": False,
             "priority": 1,
-        },
-        {
-            "name": "腾讯行情",
-            "type": "quote",
-            "provider": "tencent",
-            "config": {},
-            "enabled": True,
-            "priority": 0,
+            "supports_batch": False,
+            "test_symbols": ["601127"],
         },
     ]
 
@@ -196,7 +268,13 @@ def seed_data_sources():
             DataSource.name == source_data["name"],
             DataSource.provider == source_data["provider"],
         ).first()
-        if not existing:
+        if existing:
+            # 更新已存在记录的新字段（保留用户可能修改的配置）
+            if existing.supports_batch != source_data.get("supports_batch", False):
+                existing.supports_batch = source_data.get("supports_batch", False)
+            if not existing.test_symbols:  # 只在空时更新
+                existing.test_symbols = source_data.get("test_symbols", [])
+        else:
             db.add(DataSource(**source_data))
 
     db.commit()
@@ -487,6 +565,7 @@ def build_context(agent_name: str, stock_agent_id: int | None = None) -> AgentCo
 # Agent 注册表
 AGENT_REGISTRY: dict[str, type] = {
     "daily_report": DailyReportAgent,
+    "premarket_outlook": PremarketOutlookAgent,
     "news_digest": NewsDigestAgent,
     "chart_analyst": ChartAnalystAgent,
     "intraday_monitor": IntradayMonitorAgent,
@@ -653,6 +732,7 @@ async def lifespan(app):
     setup_ssl()
     seed_agents()
     seed_data_sources()
+    seed_sample_stocks()
 
     # 后台刷新股票列表缓存
     import threading

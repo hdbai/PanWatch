@@ -63,6 +63,9 @@ def _migrate(engine):
         ("agent_configs", "execution_mode", "ALTER TABLE agent_configs ADD COLUMN execution_mode TEXT DEFAULT 'batch'"),
         # Phase 4: 持仓交易风格
         ("positions", "trading_style", "ALTER TABLE positions ADD COLUMN trading_style TEXT DEFAULT 'swing'"),
+        # 数据源增强
+        ("data_sources", "supports_batch", "ALTER TABLE data_sources ADD COLUMN supports_batch INTEGER DEFAULT 0"),
+        ("data_sources", "test_symbols", "ALTER TABLE data_sources ADD COLUMN test_symbols TEXT DEFAULT '[]'"),
     ]
     with engine.connect() as conn:
         for table, column, sql in migrations:

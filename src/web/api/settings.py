@@ -22,10 +22,9 @@ class SettingResponse(BaseModel):
         from_attributes = True
 
 
-# 配置项描述（仅保留网络和调度相关）
+# 配置项描述
 SETTING_DESCRIPTIONS = {
     "http_proxy": "HTTP 代理地址",
-    "daily_report_cron": "日报调度 cron 表达式",
 }
 
 SETTING_KEYS = list(SETTING_DESCRIPTIONS.keys())
@@ -36,7 +35,6 @@ def _get_env_defaults() -> dict[str, str]:
     s = Settings()
     return {
         "http_proxy": s.http_proxy,
-        "daily_report_cron": s.daily_report_cron,
     }
 
 

@@ -80,6 +80,22 @@ def update_agent(agent_name: str, update: AgentConfigUpdate, db: Session = Depen
     return _agent_to_response(agent)
 
 
+@router.delete("/{agent_name}")
+def delete_agent(agent_name: str, db: Session = Depends(get_db)):
+    """删除 Agent 配置"""
+    agent = db.query(AgentConfig).filter(AgentConfig.name == agent_name).first()
+    if not agent:
+        raise HTTPException(404, f"Agent {agent_name} 不存在")
+
+    # 删除关联的 stock_agents 记录
+    from src.web.models import StockAgent
+    db.query(StockAgent).filter(StockAgent.agent_name == agent_name).delete()
+
+    db.delete(agent)
+    db.commit()
+    return {"ok": True, "message": f"Agent {agent_name} 已删除"}
+
+
 @router.post("/{agent_name}/trigger")
 async def trigger_agent_endpoint(agent_name: str, db: Session = Depends(get_db)):
     """手动触发 Agent 执行"""

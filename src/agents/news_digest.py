@@ -33,7 +33,7 @@ class NewsDigestAgent(BaseAgent):
             logger.warning("自选股列表为空，跳过新闻采集")
             return {"news": [], "related_news": [], "watchlist": []}
 
-        collector = NewsCollector()
+        collector = NewsCollector.from_database()
         news_list = await collector.fetch_all(
             symbols=symbols,
             since_hours=self.since_hours,

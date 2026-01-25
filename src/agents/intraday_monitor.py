@@ -1,10 +1,11 @@
 """盘中监测 Agent - 实时监控持仓，AI 判断是否需要提醒"""
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from pathlib import Path
 
 from src.agents.base import BaseAgent, AgentContext, AnalysisResult
 from src.collectors.akshare_collector import AkshareCollector
+from src.core.analysis_history import get_latest_analysis, get_analysis
 from src.models.market import MarketCode, StockData
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ class IntradayMonitorAgent(BaseAgent):
         self.bypass_throttle = bypass_throttle
 
     async def collect(self, context: AgentContext) -> dict:
-        """采集实时行情"""
+        """采集实时行情 + 历史分析"""
         if not context.watchlist:
             logger.warning("自选股列表为空，跳过盘中监测")
             return {"stocks": [], "stock_data": None}
@@ -58,15 +59,33 @@ class IntradayMonitorAgent(BaseAgent):
         # 单只模式下只有一只股票
         stock_data = all_stocks[0] if all_stocks else None
 
+        # 获取历史分析（为 AI 提供更多上下文）
+        daily_analysis = get_latest_analysis(
+            agent_name="daily_report",
+            stock_symbol="*",
+            before_date=date.today(),
+        )
+        premarket_analysis = get_analysis(
+            agent_name="premarket_outlook",
+            stock_symbol="*",
+            analysis_date=date.today(),
+        )
+
         return {
             "stocks": all_stocks,
             "stock_data": stock_data,
+            "daily_analysis": daily_analysis.content if daily_analysis else None,
+            "premarket_analysis": premarket_analysis.content if premarket_analysis else None,
             "timestamp": datetime.now().isoformat(),
         }
 
     def build_prompt(self, data: dict, context: AgentContext) -> tuple[str, str]:
         """构建盘中分析 Prompt"""
         system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        # 辅助函数：安全获取数值，None 转为默认值
+        def safe_num(value, default=0):
+            return value if value is not None else default
 
         stock: StockData | None = data.get("stock_data")
         if not stock:
@@ -80,36 +99,65 @@ class IntradayMonitorAgent(BaseAgent):
         lines.append(f"## 时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
 
         # 股票行情
+        current_price = safe_num(stock.current_price)
+        change_pct = safe_num(stock.change_pct)
+        change_amount = safe_num(stock.change_amount)
+        open_price = safe_num(stock.open_price)
+        high_price = safe_num(stock.high_price)
+        low_price = safe_num(stock.low_price)
+        prev_close = safe_num(stock.prev_close)
+        volume = safe_num(stock.volume)
+        turnover = safe_num(stock.turnover)
+
         lines.append("## 股票行情")
         lines.append(f"- 股票：{stock.name}（{stock.symbol}）")
-        lines.append(f"- 现价：{stock.current_price:.2f}")
-        lines.append(f"- 涨跌幅：{stock.change_pct:+.2f}%")
-        lines.append(f"- 涨跌额：{stock.change_amount:+.2f}")
-        lines.append(f"- 今开：{stock.open_price:.2f}")
-        lines.append(f"- 最高：{stock.high_price:.2f}")
-        lines.append(f"- 最低：{stock.low_price:.2f}")
-        lines.append(f"- 昨收：{stock.prev_close:.2f}")
-        if stock.volume > 0:
-            lines.append(f"- 成交量：{stock.volume:.0f} 手")
-        if stock.turnover > 0:
-            lines.append(f"- 成交额：{stock.turnover / 10000:.0f} 万")
+        lines.append(f"- 现价：{current_price:.2f}")
+        lines.append(f"- 涨跌幅：{change_pct:+.2f}%")
+        lines.append(f"- 涨跌额：{change_amount:+.2f}")
+        lines.append(f"- 今开：{open_price:.2f}")
+        lines.append(f"- 最高：{high_price:.2f}")
+        lines.append(f"- 最低：{low_price:.2f}")
+        lines.append(f"- 昨收：{prev_close:.2f}")
+        if volume > 0:
+            lines.append(f"- 成交量：{volume:.0f} 手")
+        if turnover > 0:
+            lines.append(f"- 成交额：{turnover / 10000:.0f} 万")
 
         # 各账户持仓信息
         if positions:
             lines.append(f"\n## 持仓情况（共 {len(positions)} 个账户）")
             for i, pos in enumerate(positions, 1):
-                pnl_pct = (stock.current_price - pos.cost_price) / pos.cost_price * 100
+                cost_price = safe_num(pos.cost_price, 1)
+                pnl_pct = (current_price - cost_price) / cost_price * 100 if cost_price > 0 else 0
                 style_label = style_labels.get(pos.trading_style, "波段")
                 lines.append(f"\n### 持仓 {i}：{pos.account_name}")
                 lines.append(f"- 交易风格：{style_label}")
-                lines.append(f"- 成本价：{pos.cost_price:.2f}")
+                lines.append(f"- 成本价：{cost_price:.2f}")
                 lines.append(f"- 持仓量：{pos.quantity} 股")
-                lines.append(f"- 持仓市值：{stock.current_price * pos.quantity:.0f} 元")
+                lines.append(f"- 持仓市值：{current_price * pos.quantity:.0f} 元")
                 lines.append(f"- 浮动盈亏：{pnl_pct:+.1f}%")
         else:
             lines.append("\n## 未持仓（仅关注）")
 
-        lines.append("\n请分析以上数据，判断是否有值得提醒用户的信号。")
+        # 历史分析上下文（帮助 AI 做出更好的判断）
+        daily_analysis = data.get("daily_analysis")
+        premarket_analysis = data.get("premarket_analysis")
+
+        if daily_analysis or premarket_analysis:
+            lines.append("\n## 历史分析参考")
+
+            if daily_analysis:
+                # 截取与当前股票相关的部分（最多 300 字）
+                content = daily_analysis[:300] + "..." if len(daily_analysis) > 300 else daily_analysis
+                lines.append(f"\n### 昨日盘后分析摘要")
+                lines.append(content)
+
+            if premarket_analysis:
+                content = premarket_analysis[:300] + "..." if len(premarket_analysis) > 300 else premarket_analysis
+                lines.append(f"\n### 今日盘前分析摘要")
+                lines.append(content)
+
+        lines.append("\n请结合历史分析和实时行情，判断是否有值得提醒用户的信号。")
 
         user_content = "\n".join(lines)
         return system_prompt, user_content

@@ -57,9 +57,11 @@ export interface NotifyChannel {
 export interface DataSource {
   id: number
   name: string
-  type: string       // news / chart / quote
-  provider: string   // cls / eastmoney / tencent
+  type: string       // news / kline / capital_flow / quote / chart
+  provider: string   // xueqiu / eastmoney / tencent
   config: Record<string, unknown>
   enabled: boolean
   priority: number
+  supports_batch: boolean
+  test_symbols: string[]
 }

@@ -1,15 +1,20 @@
 import { Routes, Route, NavLink, useLocation } from 'react-router-dom'
-import { Moon, Sun, TrendingUp, Bot, ScrollText, Settings, List, Database } from 'lucide-react'
+import { Moon, Sun, TrendingUp, Bot, ScrollText, Settings, List, Database, Clock, LayoutDashboard } from 'lucide-react'
 import { useTheme } from '@/hooks/use-theme'
+import DashboardPage from '@/pages/Dashboard'
 import StocksPage from '@/pages/Stocks'
 import AgentsPage from '@/pages/Agents'
 import SettingsPage from '@/pages/Settings'
 import LogsPage from '@/pages/Logs'
 import DataSourcesPage from '@/pages/DataSources'
+import HistoryPage from '@/pages/History'
+import NewsPage from '@/pages/News'
 
 const navItems = [
-  { to: '/', icon: List, label: '自选股' },
+  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/portfolio', icon: List, label: '持仓' },
   { to: '/agents', icon: Bot, label: 'Agent' },
+  { to: '/history', icon: Clock, label: '历史' },
   { to: '/datasources', icon: Database, label: '数据源' },
   { to: '/logs', icon: ScrollText, label: '日志' },
   { to: '/settings', icon: Settings, label: '设置' },
@@ -70,8 +75,11 @@ function App() {
       {/* Content */}
       <main className="px-6 py-6">
         <Routes>
-          <Route path="/" element={<StocksPage />} />
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/portfolio" element={<StocksPage />} />
           <Route path="/agents" element={<AgentsPage />} />
+          <Route path="/news" element={<NewsPage />} />
+          <Route path="/history" element={<HistoryPage />} />
           <Route path="/datasources" element={<DataSourcesPage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/settings" element={<SettingsPage />} />

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.web.api import stocks, agents, settings, logs, providers, channels, datasources, accounts
+from src.web.api import stocks, agents, settings, logs, providers, channels, datasources, accounts, history, news, market
 from src.web.response import ResponseWrapperMiddleware
 
 app = FastAPI(title="PanWatch API", version="0.1.0")
@@ -23,6 +23,9 @@ app.include_router(channels.router, prefix="/api/channels", tags=["channels"])
 app.include_router(datasources.router, prefix="/api/datasources", tags=["datasources"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
+app.include_router(history.router, prefix="/api", tags=["history"])
+app.include_router(news.router, prefix="/api/news", tags=["news"])
+app.include_router(market.router, prefix="/api/market", tags=["market"])
 
 
 @app.get("/api/health")

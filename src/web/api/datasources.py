@@ -12,13 +12,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# 数据源类型说明
+TYPE_LABELS = {
+    "news": "新闻资讯",
+    "kline": "K线数据",
+    "capital_flow": "资金流向",
+    "quote": "实时行情",
+    "chart": "K线截图",
+}
+
+
 class DataSourceCreate(BaseModel):
     name: str
-    type: str  # news / chart / quote
+    type: str  # news / kline / capital_flow / quote / chart
     provider: str
     config: dict = {}
     enabled: bool = True
     priority: int = 0
+    supports_batch: bool = False
+    test_symbols: list[str] = []
 
 
 class DataSourceUpdate(BaseModel):
@@ -28,41 +40,71 @@ class DataSourceUpdate(BaseModel):
     config: dict | None = None
     enabled: bool | None = None
     priority: int | None = None
+    supports_batch: bool | None = None
+    test_symbols: list[str] | None = None
 
 
 class DataSourceResponse(BaseModel):
     id: int
     name: str
     type: str
+    type_label: str = ""
     provider: str
     config: dict
     enabled: bool
     priority: int
+    supports_batch: bool = False
+    test_symbols: list[str] = []
 
     class Config:
         from_attributes = True
 
 
-@router.get("", response_model=list[DataSourceResponse])
+def _to_response(source: DataSource) -> dict:
+    """转换为响应格式"""
+    return {
+        "id": source.id,
+        "name": source.name,
+        "type": source.type,
+        "type_label": TYPE_LABELS.get(source.type, source.type),
+        "provider": source.provider,
+        "config": source.config or {},
+        "enabled": source.enabled,
+        "priority": source.priority,
+        "supports_batch": source.supports_batch or False,
+        "test_symbols": source.test_symbols or [],
+    }
+
+
+@router.get("")
 def list_datasources(type: str | None = None, db: Session = Depends(get_db)):
     """获取数据源列表，可按类型筛选"""
     query = db.query(DataSource)
     if type:
         query = query.filter(DataSource.type == type)
-    sources = query.order_by(DataSource.priority, DataSource.id).all()
-    return sources
+    sources = query.order_by(DataSource.type, DataSource.priority, DataSource.id).all()
+    return [_to_response(s) for s in sources]
 
 
-@router.get("/{source_id}", response_model=DataSourceResponse)
+@router.get("/types")
+def get_datasource_types():
+    """获取数据源类型列表"""
+    return [
+        {"type": k, "label": v}
+        for k, v in TYPE_LABELS.items()
+    ]
+
+
+@router.get("/{source_id}")
 def get_datasource(source_id: int, db: Session = Depends(get_db)):
     """获取单个数据源"""
     source = db.query(DataSource).filter(DataSource.id == source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="数据源不存在")
-    return source
+    return _to_response(source)
 
 
-@router.post("", response_model=DataSourceResponse)
+@router.post("")
 def create_datasource(data: DataSourceCreate, db: Session = Depends(get_db)):
     """创建数据源"""
     source = DataSource(
@@ -72,38 +114,30 @@ def create_datasource(data: DataSourceCreate, db: Session = Depends(get_db)):
         config=data.config,
         enabled=data.enabled,
         priority=data.priority,
+        supports_batch=data.supports_batch,
+        test_symbols=data.test_symbols,
     )
     db.add(source)
     db.commit()
     db.refresh(source)
     logger.info(f"创建数据源: {source.name} ({source.provider})")
-    return source
+    return _to_response(source)
 
 
-@router.put("/{source_id}", response_model=DataSourceResponse)
+@router.put("/{source_id}")
 def update_datasource(source_id: int, data: DataSourceUpdate, db: Session = Depends(get_db)):
     """更新数据源"""
     source = db.query(DataSource).filter(DataSource.id == source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="数据源不存在")
 
-    if data.name is not None:
-        source.name = data.name
-    if data.type is not None:
-        source.type = data.type
-    if data.provider is not None:
-        source.provider = data.provider
-    if data.config is not None:
-        source.config = data.config
-    if data.enabled is not None:
-        source.enabled = data.enabled
-    if data.priority is not None:
-        source.priority = data.priority
+    for key, value in data.model_dump(exclude_unset=True).items():
+        setattr(source, key, value)
 
     db.commit()
     db.refresh(source)
     logger.info(f"更新数据源: {source.name}")
-    return source
+    return _to_response(source)
 
 
 @router.delete("/{source_id}")
@@ -116,112 +150,34 @@ def delete_datasource(source_id: int, db: Session = Depends(get_db)):
     db.delete(source)
     db.commit()
     logger.info(f"删除数据源: {source.name}")
-    return {"success": True}
+    return {"ok": True, "message": f"已删除 {source.name}"}
 
 
 @router.post("/{source_id}/test")
 async def test_datasource(source_id: int, db: Session = Depends(get_db)):
-    """测试数据源连接，返回详细结果"""
+    """测试数据源连接"""
     source = db.query(DataSource).filter(DataSource.id == source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="数据源不存在")
 
-    try:
-        result = await _test_source(source)
-        return {"success": True, **result}
-    except Exception as e:
-        logger.error(f"测试数据源失败 ({source.name}): {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    from src.core.data_collector import get_collector_manager
 
+    manager = get_collector_manager()
+    manager.clear_logs()
 
-async def _test_source(source: DataSource) -> dict:
-    """测试数据源，返回详细结果"""
-    from datetime import datetime, timedelta
+    result = await manager.test_source(source)
 
-    if source.type == "news":
-        if source.provider == "sina":
-            from src.collectors.news_collector import SinaNewsCollector
-            collector = SinaNewsCollector()
-            since = datetime.now() - timedelta(hours=2)
-            news = await collector.fetch_news(since=since)
-            news_list = [
-                {
-                    "title": n.title[:50] + ("..." if len(n.title) > 50 else ""),
-                    "time": n.publish_time.strftime("%H:%M"),
-                    "importance": n.importance,
-                }
-                for n in news[:10]
-            ]
-            return {
-                "type": "news",
-                "count": len(news),
-                "items": news_list,
-                "message": f"获取到 {len(news)} 条快讯",
-            }
-        elif source.provider == "eastmoney":
-            from src.collectors.news_collector import EastMoneyNewsCollector
-            collector = EastMoneyNewsCollector()
-            since = datetime.now() - timedelta(hours=24)  # 24小时内的公告
-            news = await collector.fetch_news(symbols=["600519"], since=since)
-            news_list = [
-                {
-                    "title": n.title[:50] + ("..." if len(n.title) > 50 else ""),
-                    "time": n.publish_time.strftime("%m-%d"),
-                    "importance": n.importance,
-                }
-                for n in news[:10]
-            ]
-            return {
-                "type": "news",
-                "count": len(news),
-                "items": news_list,
-                "message": f"获取到 {len(news)} 条公告（贵州茅台近24小时）",
-            }
-
-    elif source.type == "chart":
-        from src.collectors.screenshot_collector import ScreenshotCollector
-        import base64
-        # 增加等待时间确保弹窗关闭
-        collector = ScreenshotCollector(config={"extra_wait_ms": 4000})
-        try:
-            screenshot = await collector.capture(
-                symbol="600519",
-                name="贵州茅台",
-                market="CN",
-                provider=source.provider,
-            )
-            if screenshot and screenshot.exists:
-                # 读取图片并转为 base64
-                with open(screenshot.filepath, "rb") as f:
-                    img_base64 = base64.b64encode(f.read()).decode("utf-8")
-                return {
-                    "type": "chart",
-                    "image": f"data:image/png;base64,{img_base64}",
-                    "filepath": screenshot.filepath,
-                    "message": "截图成功",
-                }
-            return {"type": "chart", "message": "截图失败，请检查 Playwright 安装"}
-        finally:
-            await collector.close()
-
-    elif source.type == "quote":
-        if source.provider == "tencent":
-            from src.collectors.akshare_collector import _fetch_tencent_quotes
-            quotes = _fetch_tencent_quotes(["sh000001", "sz399001", "sz399006"])
-            if quotes:
-                items = [
-                    {
-                        "name": q["name"],
-                        "price": q["current_price"],
-                        "change_pct": q["change_pct"],
-                    }
-                    for q in quotes
-                ]
-                return {
-                    "type": "quote",
-                    "items": items,
-                    "message": f"获取到 {len(quotes)} 个指数行情",
-                }
-            return {"type": "quote", "message": "腾讯行情接口就绪"}
-
-    return {"type": "unknown", "message": f"数据源 {source.provider} 测试通过"}
+    return {
+        "success": result.success,
+        "source_name": source.name,
+        "source_type": source.type,
+        "type_label": TYPE_LABELS.get(source.type, source.type),
+        "provider": source.provider,
+        "supports_batch": source.supports_batch or False,
+        "test_symbols": source.test_symbols or [],
+        "count": result.count,
+        "duration_ms": result.duration_ms,
+        "error": result.error,
+        "data": result.data,
+        "logs": manager.get_logs(),
+    }
