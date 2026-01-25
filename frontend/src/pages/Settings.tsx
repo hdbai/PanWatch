@@ -47,6 +47,7 @@ const CHANNEL_TYPE_FIELDS: Record<string, { label: string; fields: ChannelFieldD
     fields: [
       { key: 'bot_token', label: 'Bot Token', placeholder: '123456:ABC-DEF...', secret: true, required: true },
       { key: 'chat_id', label: 'Chat ID', placeholder: '-100123456789', required: true },
+      { key: 'proxy', label: '代理', placeholder: 'http://192.168.1.1:7890 或 socks5://...' },
     ],
   },
   bark: {
