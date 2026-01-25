@@ -16,6 +16,7 @@ class AgentContext:
     ai_client: AIClient
     notifier: NotifierManager
     config: AppConfig
+    model_label: str = ""  # e.g. "智谱/glm-4-flash"
 
     @property
     def watchlist(self) -> list[StockConfig]:
@@ -59,9 +60,20 @@ class BaseAgent(ABC):
         """调用 AI 分析"""
         system_prompt, user_content = self.build_prompt(data, context)
         content = await context.ai_client.chat(system_prompt, user_content)
+
+        # 标题含股票信息
+        stock_names = "、".join(s.name for s in context.watchlist[:5])
+        if len(context.watchlist) > 5:
+            stock_names += f" 等{len(context.watchlist)}只"
+        title = f"【{self.display_name}】{stock_names}"
+
+        # 结尾附 AI 模型信息
+        if context.model_label:
+            content = content.rstrip() + f"\n\n---\nAI: {context.model_label}"
+
         return AnalysisResult(
             agent_name=self.name,
-            title=f"【{self.display_name}】",
+            title=title,
             content=content,
             raw_data=data,
         )

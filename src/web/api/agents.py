@@ -11,8 +11,8 @@ router = APIRouter()
 class AgentConfigUpdate(BaseModel):
     enabled: bool | None = None
     schedule: str | None = None
-    ai_model: str | None = None
-    ai_base_url: str | None = None
+    ai_model_id: int | None = None
+    notify_channel_ids: list[int] | None = None
     config: dict | None = None
 
 
@@ -23,8 +23,8 @@ class AgentConfigResponse(BaseModel):
     description: str
     enabled: bool
     schedule: str
-    ai_model: str
-    ai_base_url: str
+    ai_model_id: int | None
+    notify_channel_ids: list[int]
     config: dict
 
     class Config:
@@ -46,7 +46,22 @@ class AgentRunResponse(BaseModel):
 
 @router.get("", response_model=list[AgentConfigResponse])
 def list_agents(db: Session = Depends(get_db)):
-    return db.query(AgentConfig).all()
+    agents = db.query(AgentConfig).all()
+    return [_agent_to_response(a) for a in agents]
+
+
+def _agent_to_response(agent: AgentConfig) -> dict:
+    return {
+        "id": agent.id,
+        "name": agent.name,
+        "display_name": agent.display_name,
+        "description": agent.description,
+        "enabled": agent.enabled,
+        "schedule": agent.schedule or "",
+        "ai_model_id": agent.ai_model_id,
+        "notify_channel_ids": agent.notify_channel_ids or [],
+        "config": agent.config or {},
+    }
 
 
 @router.put("/{agent_name}", response_model=AgentConfigResponse)
@@ -60,7 +75,7 @@ def update_agent(agent_name: str, update: AgentConfigUpdate, db: Session = Depen
 
     db.commit()
     db.refresh(agent)
-    return agent
+    return _agent_to_response(agent)
 
 
 @router.post("/{agent_name}/trigger")

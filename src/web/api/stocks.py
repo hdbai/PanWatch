@@ -7,6 +7,8 @@ from pydantic import BaseModel
 from src.web.database import get_db
 from src.web.models import Stock, StockAgent, AgentConfig
 from src.web.stock_list import search_stocks, refresh_stock_list
+from src.collectors.akshare_collector import _tencent_symbol, _fetch_tencent_quotes
+from src.models.market import MarketCode
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -30,6 +32,8 @@ class StockUpdate(BaseModel):
 class StockAgentInfo(BaseModel):
     agent_name: str
     schedule: str = ""
+    ai_model_id: int | None = None
+    notify_channel_ids: list[int] = []
 
 
 class StockResponse(BaseModel):
@@ -49,6 +53,8 @@ class StockResponse(BaseModel):
 class StockAgentItem(BaseModel):
     agent_name: str
     schedule: str = ""
+    ai_model_id: int | None = None
+    notify_channel_ids: list[int] = []
 
 
 class StockAgentUpdate(BaseModel):
@@ -64,7 +70,15 @@ def _stock_to_response(stock: Stock) -> dict:
         "cost_price": stock.cost_price,
         "quantity": stock.quantity,
         "enabled": stock.enabled,
-        "agents": [{"agent_name": sa.agent_name, "schedule": sa.schedule or ""} for sa in stock.agents],
+        "agents": [
+            {
+                "agent_name": sa.agent_name,
+                "schedule": sa.schedule or "",
+                "ai_model_id": sa.ai_model_id,
+                "notify_channel_ids": sa.notify_channel_ids or [],
+            }
+            for sa in stock.agents
+        ],
     }
 
 
@@ -85,6 +99,44 @@ def refresh_list():
 def list_stocks(db: Session = Depends(get_db)):
     stocks = db.query(Stock).all()
     return [_stock_to_response(s) for s in stocks]
+
+
+@router.get("/quotes")
+def get_quotes(db: Session = Depends(get_db)):
+    """获取所有自选股的实时行情"""
+    stocks = db.query(Stock).filter(Stock.enabled == True).all()
+    if not stocks:
+        return {}
+
+    # 按市场分组
+    market_stocks: dict[str, list[Stock]] = {}
+    for s in stocks:
+        market_stocks.setdefault(s.market, []).append(s)
+
+    quotes = {}
+    for market, stock_list in market_stocks.items():
+        try:
+            market_code = MarketCode(market)
+        except ValueError:
+            continue
+
+        if market_code == MarketCode.US:
+            continue
+
+        symbols = [_tencent_symbol(s.symbol, market_code) for s in stock_list]
+        try:
+            items = _fetch_tencent_quotes(symbols)
+            for item in items:
+                quotes[item["symbol"]] = {
+                    "current_price": item["current_price"],
+                    "change_pct": item["change_pct"],
+                    "change_amount": item["change_amount"],
+                    "prev_close": item["prev_close"],
+                }
+        except Exception as e:
+            logger.error(f"获取 {market} 行情失败: {e}")
+
+    return quotes
 
 
 @router.post("", response_model=StockResponse)
@@ -128,12 +180,11 @@ def delete_stock(stock_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{stock_id}/agents", response_model=StockResponse)
 def update_stock_agents(stock_id: int, body: StockAgentUpdate, db: Session = Depends(get_db)):
-    """更新股票关联的 Agent 列表（含调度配置）"""
+    """更新股票关联的 Agent 列表（含调度配置和 AI/通知覆盖）"""
     db_stock = db.query(Stock).filter(Stock.id == stock_id).first()
     if not db_stock:
         raise HTTPException(404, "股票不存在")
 
-    # 验证 agent_names 是否存在
     for item in body.agents:
         agent = db.query(AgentConfig).filter(AgentConfig.name == item.agent_name).first()
         if not agent:
@@ -142,7 +193,13 @@ def update_stock_agents(stock_id: int, body: StockAgentUpdate, db: Session = Dep
     # 清除旧关联，重建
     db.query(StockAgent).filter(StockAgent.stock_id == stock_id).delete()
     for item in body.agents:
-        db.add(StockAgent(stock_id=stock_id, agent_name=item.agent_name, schedule=item.schedule))
+        db.add(StockAgent(
+            stock_id=stock_id,
+            agent_name=item.agent_name,
+            schedule=item.schedule,
+            ai_model_id=item.ai_model_id,
+            notify_channel_ids=item.notify_channel_ids,
+        ))
 
     db.commit()
     db.refresh(db_stock)
@@ -166,7 +223,7 @@ async def trigger_stock_agent(stock_id: int, agent_name: str, db: Session = Depe
 
     from server import trigger_agent_for_stock
     try:
-        result = await trigger_agent_for_stock(agent_name, db_stock)
+        result = await trigger_agent_for_stock(agent_name, db_stock, stock_agent_id=sa.id)
         logger.info(f"Agent {agent_name} 执行完成 - {db_stock.symbol}")
         return {"result": result}
     except ValueError as e:

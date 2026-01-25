@@ -1,12 +1,88 @@
+"""数据采集器 - 基于腾讯股票 HTTP API（稳定可靠，无 SSL 问题）"""
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime, date
+from datetime import datetime
 
-import akshare as ak
+import httpx
 
 from src.models.market import MarketCode, StockData, IndexData
 
 logger = logging.getLogger(__name__)
+
+# 腾讯股票行情 API（HTTP，GBK 编码）
+TENCENT_QUOTE_URL = "http://qt.gtimg.cn/q="
+
+# 预定义指数
+CN_INDICES = [
+    ("000001", "上证指数", "sh"),
+    ("399001", "深证成指", "sz"),
+    ("399006", "创业板指", "sz"),
+]
+
+
+def _tencent_symbol(symbol: str, market: MarketCode = MarketCode.CN) -> str:
+    """转换为腾讯 API 格式: sh600519 / sz000001"""
+    if market == MarketCode.HK:
+        return f"hk{symbol}"
+    # A股: 6开头沪市, 其余深市
+    prefix = "sh" if symbol.startswith("6") or symbol.startswith("000") else "sz"
+    return prefix + symbol
+
+
+def _parse_tencent_line(line: str) -> dict | None:
+    """解析腾讯 API 单行响应"""
+    if "=\"\"" in line or not line.strip():
+        return None
+    try:
+        _, value = line.split('="', 1)
+        value = value.rstrip('";')
+        parts = value.split("~")
+        if len(parts) < 35:
+            return None
+
+        # 解析成交额: parts[35] 格式为 "price/vol/turnover"
+        turnover = 0.0
+        if "/" in str(parts[35]):
+            turnover_parts = parts[35].split("/")
+            if len(turnover_parts) >= 3:
+                try:
+                    turnover = float(turnover_parts[2])
+                except (ValueError, IndexError):
+                    pass
+
+        return {
+            "name": parts[1],
+            "symbol": parts[2],
+            "current_price": float(parts[3] or 0),
+            "prev_close": float(parts[4] or 0),
+            "open_price": float(parts[5] or 0),
+            "volume": float(parts[6] or 0),
+            "change_amount": float(parts[31] or 0),
+            "change_pct": float(parts[32] or 0),
+            "high_price": float(parts[33] or 0),
+            "low_price": float(parts[34] or 0),
+            "turnover": turnover,
+        }
+    except (ValueError, IndexError) as e:
+        logger.debug(f"解析腾讯行情失败: {e}")
+        return None
+
+
+def _fetch_tencent_quotes(symbols: list[str]) -> list[dict]:
+    """批量获取腾讯实时行情"""
+    if not symbols:
+        return []
+    url = TENCENT_QUOTE_URL + ",".join(symbols)
+    with httpx.Client() as client:
+        resp = client.get(url, timeout=10)
+        content = resp.content.decode("gbk", errors="ignore")
+
+    results = []
+    for line in content.strip().split(";"):
+        parsed = _parse_tencent_line(line)
+        if parsed and parsed["current_price"] > 0:
+            results.append(parsed)
+    return results
 
 
 class BaseCollector(ABC):
@@ -16,17 +92,15 @@ class BaseCollector(ABC):
 
     @abstractmethod
     async def get_index_data(self) -> list[IndexData]:
-        """获取大盘指数"""
         ...
 
     @abstractmethod
     async def get_stock_data(self, symbols: list[str]) -> list[StockData]:
-        """获取个股行情"""
         ...
 
 
 class AkshareCollector(BaseCollector):
-    """基于 akshare 的数据采集器，支持 A 股和 H 股"""
+    """基于腾讯 HTTP API 的数据采集器"""
 
     def __init__(self, market: MarketCode):
         if market == MarketCode.US:
@@ -34,163 +108,90 @@ class AkshareCollector(BaseCollector):
         self.market = market
 
     async def get_index_data(self) -> list[IndexData]:
-        """获取大盘指数数据"""
         if self.market == MarketCode.CN:
             return self._get_cn_index()
-        elif self.market == MarketCode.HK:
-            return self._get_hk_index()
         return []
 
     async def get_stock_data(self, symbols: list[str]) -> list[StockData]:
-        """获取个股行情"""
         if self.market == MarketCode.CN:
             return self._get_cn_stocks(symbols)
         elif self.market == MarketCode.HK:
             return self._get_hk_stocks(symbols)
         return []
 
-    def _today_str(self) -> str:
-        return date.today().strftime("%Y%m%d")
-
     def _get_cn_index(self) -> list[IndexData]:
-        """获取 A 股主要指数（使用日线历史接口）"""
-        indices = []
-        index_list = [
-            ("000001", "上证指数"),
-            ("399001", "深证成指"),
-            ("399006", "创业板指"),
-        ]
-        today = self._today_str()
-
-        for symbol, name in index_list:
-            try:
-                df = ak.stock_zh_index_daily_em(symbol=f"sh{symbol}" if symbol.startswith("0") else f"sz{symbol}")
-                if df.empty:
-                    continue
-                row = df.iloc[-1]
-                prev_close = float(row.get("open", row.get("close", 0)))
-                close = float(row.get("close", 0))
-                indices.append(IndexData(
-                    symbol=symbol,
-                    name=name,
-                    market=MarketCode.CN,
-                    current_price=close,
-                    change_pct=float(row.get("close", 0) - row.get("open", 0)) / max(float(row.get("open", 1)), 1) * 100,
-                    change_amount=float(row.get("close", 0)) - float(row.get("open", 0)),
-                    volume=float(row.get("volume", 0)),
-                    turnover=0,
-                    timestamp=datetime.now(),
-                ))
-            except Exception as e:
-                logger.error(f"获取指数 {name}({symbol}) 失败: {e}")
-
-        return indices
-
-    def _get_hk_index(self) -> list[IndexData]:
-        """获取港股主要指数"""
-        indices = []
-        # 使用恒生指数历史数据
+        tencent_symbols = [f"{prefix}{symbol}" for symbol, _, prefix in CN_INDICES]
         try:
-            df = ak.stock_hk_index_daily_em(symbol="HSI")
-            if not df.empty:
-                row = df.iloc[-1]
-                close = float(row.get("close", row.get("收盘", 0)))
-                open_price = float(row.get("open", row.get("开盘", 0)))
-                indices.append(IndexData(
-                    symbol="HSI",
-                    name="恒生指数",
-                    market=MarketCode.HK,
-                    current_price=close,
-                    change_pct=(close - open_price) / max(open_price, 1) * 100,
-                    change_amount=close - open_price,
-                    volume=float(row.get("volume", row.get("成交量", 0))),
-                    turnover=0,
-                    timestamp=datetime.now(),
-                ))
+            items = _fetch_tencent_quotes(tencent_symbols)
         except Exception as e:
-            logger.error(f"获取恒生指数失败: {e}")
+            logger.error(f"获取 A 股指数失败: {e}")
+            return []
 
-        return indices
+        return [
+            IndexData(
+                symbol=item["symbol"],
+                name=item["name"],
+                market=MarketCode.CN,
+                current_price=item["current_price"],
+                change_pct=item["change_pct"],
+                change_amount=item["change_amount"],
+                volume=item["volume"],
+                turnover=item["turnover"],
+                timestamp=datetime.now(),
+            )
+            for item in items
+        ]
 
     def _get_cn_stocks(self, symbols: list[str]) -> list[StockData]:
-        """获取 A 股个股行情（使用日线历史接口）"""
-        stocks = []
-        today = self._today_str()
+        tencent_symbols = [_tencent_symbol(s, MarketCode.CN) for s in symbols]
+        try:
+            items = _fetch_tencent_quotes(tencent_symbols)
+        except Exception as e:
+            logger.error(f"获取 A 股行情失败: {e}")
+            return []
 
-        for symbol in symbols:
-            try:
-                df = ak.stock_zh_a_hist(
-                    symbol=symbol, period="daily",
-                    start_date=today, end_date=today, adjust=""
-                )
-                if df.empty:
-                    # 今天可能不是交易日，取最近一天
-                    df = ak.stock_zh_a_hist(
-                        symbol=symbol, period="daily", adjust=""
-                    )
-                if df.empty:
-                    logger.warning(f"A股 {symbol} 无数据")
-                    continue
-
-                row = df.iloc[-1]
-                stocks.append(StockData(
-                    symbol=symbol,
-                    name="",  # hist 接口不返回名称，后续用 watchlist 配置补充
-                    market=MarketCode.CN,
-                    current_price=float(row.get("收盘", 0)),
-                    change_pct=float(row.get("涨跌幅", 0)),
-                    change_amount=float(row.get("涨跌额", 0)),
-                    volume=float(row.get("成交量", 0)),
-                    turnover=float(row.get("成交额", 0)),
-                    open_price=float(row.get("开盘", 0)),
-                    high_price=float(row.get("最高", 0)),
-                    low_price=float(row.get("最低", 0)),
-                    prev_close=float(row.get("收盘", 0)) - float(row.get("涨跌额", 0)),
-                    timestamp=datetime.now(),
-                ))
-            except Exception as e:
-                logger.error(f"获取 A 股 {symbol} 行情失败: {e}")
-
-        return stocks
+        return [
+            StockData(
+                symbol=item["symbol"],
+                name=item["name"],
+                market=MarketCode.CN,
+                current_price=item["current_price"],
+                change_pct=item["change_pct"],
+                change_amount=item["change_amount"],
+                volume=item["volume"],
+                turnover=item["turnover"],
+                open_price=item["open_price"],
+                high_price=item["high_price"],
+                low_price=item["low_price"],
+                prev_close=item["prev_close"],
+                timestamp=datetime.now(),
+            )
+            for item in items
+        ]
 
     def _get_hk_stocks(self, symbols: list[str]) -> list[StockData]:
-        """获取港股个股行情（使用日线历史接口）"""
-        stocks = []
-        today = self._today_str()
+        tencent_symbols = [_tencent_symbol(s, MarketCode.HK) for s in symbols]
+        try:
+            items = _fetch_tencent_quotes(tencent_symbols)
+        except Exception as e:
+            logger.error(f"获取港股行情失败: {e}")
+            return []
 
-        for symbol in symbols:
-            try:
-                df = ak.stock_hk_hist(
-                    symbol=symbol, period="daily",
-                    start_date=today, end_date=today, adjust=""
-                )
-                if df.empty:
-                    df = ak.stock_hk_hist(
-                        symbol=symbol, period="daily", adjust=""
-                    )
-                if df.empty:
-                    logger.warning(f"港股 {symbol} 无数据")
-                    continue
-
-                row = df.iloc[-1]
-                close = float(row.get("收盘", 0))
-                prev_close = close - float(row.get("涨跌额", 0)) if "涨跌额" in row else float(row.get("开盘", 0))
-                stocks.append(StockData(
-                    symbol=symbol,
-                    name="",
-                    market=MarketCode.HK,
-                    current_price=close,
-                    change_pct=float(row.get("涨跌幅", 0)),
-                    change_amount=float(row.get("涨跌额", 0)) if "涨跌额" in row else close - prev_close,
-                    volume=float(row.get("成交量", 0)),
-                    turnover=float(row.get("成交额", 0)) if "成交额" in row else 0,
-                    open_price=float(row.get("开盘", 0)),
-                    high_price=float(row.get("最高", 0)),
-                    low_price=float(row.get("最低", 0)),
-                    prev_close=prev_close,
-                    timestamp=datetime.now(),
-                ))
-            except Exception as e:
-                logger.error(f"获取港股 {symbol} 行情失败: {e}")
-
-        return stocks
+        return [
+            StockData(
+                symbol=item["symbol"],
+                name=item["name"],
+                market=MarketCode.HK,
+                current_price=item["current_price"],
+                change_pct=item["change_pct"],
+                change_amount=item["change_amount"],
+                volume=item["volume"],
+                turnover=item["turnover"],
+                open_price=item["open_price"],
+                high_price=item["high_price"],
+                low_price=item["low_price"],
+                prev_close=item["prev_close"],
+                timestamp=datetime.now(),
+            )
+            for item in items
+        ]

@@ -1,104 +1,220 @@
 import logging
-from abc import ABC, abstractmethod
 
+import apprise
 import httpx
 
 logger = logging.getLogger(__name__)
 
-TELEGRAM_API = "https://api.telegram.org"
+# 渠道类型定义 (label + 表单字段)
+CHANNEL_TYPES = {
+    "telegram": {
+        "label": "Telegram",
+        "fields": ["bot_token", "chat_id"],
+    },
+    "bark": {
+        "label": "Bark",
+        "fields": ["device_key", "server_url"],
+    },
+    "dingtalk": {
+        "label": "钉钉机器人",
+        "fields": ["token", "secret"],
+    },
+    "wecom": {
+        "label": "企业微信机器人",
+        "fields": ["webhook_key"],
+    },
+    "lark": {
+        "label": "飞书机器人",
+        "fields": ["webhook_token"],
+    },
+    "serverchan": {
+        "label": "Server酱",
+        "fields": ["sendkey"],
+    },
+    "pushplus": {
+        "label": "PushPlus",
+        "fields": ["token", "topic"],
+    },
+    "discord": {
+        "label": "Discord",
+        "fields": ["webhook_id", "webhook_token"],
+    },
+    "pushover": {
+        "label": "Pushover",
+        "fields": ["user_key", "app_token"],
+    },
+}
+
+# 通过 Apprise 支持的渠道类型
+_APPRISE_TYPES = {"telegram", "bark", "dingtalk", "lark", "discord", "pushover"}
 
 
-class BaseNotifier(ABC):
-    """通知抽象基类"""
+def build_apprise_url(channel_type: str, config: dict) -> str:
+    """根据渠道类型和配置构建 Apprise URL"""
+    if channel_type == "telegram":
+        bot_token = config.get("bot_token", "")
+        chat_id = config.get("chat_id", "")
+        if not bot_token or not chat_id:
+            raise ValueError("Telegram 需要 bot_token 和 chat_id")
+        return f"tgram://{bot_token}/{chat_id}"
 
-    name: str
+    elif channel_type == "bark":
+        device_key = config.get("device_key", "")
+        server_url = config.get("server_url", "").strip("/")
+        if not device_key:
+            raise ValueError("Bark 需要 device_key")
+        if server_url:
+            host = server_url.replace("https://", "").replace("http://", "")
+            return f"bark://{host}/{device_key}/"
+        return f"bark://{device_key}/"
 
-    @abstractmethod
-    async def send_text(self, title: str, content: str) -> bool:
-        """发送文本通知"""
-        ...
+    elif channel_type == "dingtalk":
+        token = config.get("token", "")
+        secret = config.get("secret", "")
+        if not token:
+            raise ValueError("钉钉需要 token")
+        if secret:
+            return f"dingtalk://{token}/{secret}/"
+        return f"dingtalk://{token}/"
 
-    @abstractmethod
-    async def send_image(self, title: str, image_path: str, caption: str = "") -> bool:
-        """发送图片通知"""
-        ...
+    elif channel_type == "lark":
+        webhook_token = config.get("webhook_token", "")
+        if not webhook_token:
+            raise ValueError("飞书需要 webhook_token")
+        return f"lark://{webhook_token}/"
 
+    elif channel_type == "discord":
+        webhook_id = config.get("webhook_id", "")
+        webhook_token = config.get("webhook_token", "")
+        if not webhook_id or not webhook_token:
+            raise ValueError("Discord 需要 webhook_id 和 webhook_token")
+        return f"discord://{webhook_id}/{webhook_token}/"
 
-class TelegramNotifier(BaseNotifier):
-    """Telegram 通知实现（直接调用 Bot API）"""
+    elif channel_type == "pushover":
+        user_key = config.get("user_key", "")
+        app_token = config.get("app_token", "")
+        if not user_key or not app_token:
+            raise ValueError("Pushover 需要 user_key 和 app_token")
+        return f"pover://{user_key}@{app_token}/"
 
-    name = "telegram"
-
-    def __init__(self, bot_token: str, chat_id: str, proxy: str = "", ca_cert: str = ""):
-        self.bot_token = bot_token
-        self.chat_id = chat_id
-        self.proxy = proxy or None
-        self.ca_cert = ca_cert or True  # True = 默认证书验证
-
-    def _get_client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(proxy=self.proxy, verify=self.ca_cert)
-
-    async def send_text(self, title: str, content: str) -> bool:
-        url = f"{TELEGRAM_API}/bot{self.bot_token}/sendMessage"
-        text = f"*{title}*\n\n{content}" if title else content
-
-        payload = {
-            "chat_id": self.chat_id,
-            "text": text,
-            "parse_mode": "Markdown",
-        }
-
-        try:
-            async with self._get_client() as client:
-                resp = await client.post(url, json=payload, timeout=30)
-                if resp.status_code == 200:
-                    logger.info(f"Telegram 通知发送成功: {title}")
-                    return True
-                else:
-                    logger.error(f"Telegram 通知发送失败: {resp.status_code} {resp.text}")
-                    return False
-        except Exception as e:
-            logger.error(f"Telegram 通知异常: {e}")
-            return False
-
-    async def send_image(self, title: str, image_path: str, caption: str = "") -> bool:
-        url = f"{TELEGRAM_API}/bot{self.bot_token}/sendPhoto"
-
-        try:
-            async with self._get_client() as client:
-                with open(image_path, "rb") as f:
-                    files = {"photo": f}
-                    data = {"chat_id": self.chat_id, "caption": caption or title}
-                    resp = await client.post(url, data=data, files=files, timeout=30)
-                    if resp.status_code == 200:
-                        logger.info(f"Telegram 图片发送成功: {title}")
-                        return True
-                    else:
-                        logger.error(f"Telegram 图片发送失败: {resp.status_code} {resp.text}")
-                        return False
-        except Exception as e:
-            logger.error(f"Telegram 图片发送异常: {e}")
-            return False
+    else:
+        raise ValueError(f"不支持的 Apprise 渠道类型: {channel_type}")
 
 
 class NotifierManager:
-    """通知管理器，统一管理多个通知渠道"""
+    """通知管理器: Apprise 渠道 + 自定义渠道"""
 
     def __init__(self):
-        self.notifiers: list[BaseNotifier] = []
+        self._ap = apprise.Apprise()
+        self._custom_channels: list[tuple[str, dict]] = []
+        self._channel_count = 0
 
-    def add(self, notifier: BaseNotifier):
-        self.notifiers.append(notifier)
-        logger.info(f"注册通知渠道: {notifier.name}")
+    def add_channel(self, channel_type: str, config: dict):
+        """添加通知渠道"""
+        try:
+            if channel_type in _APPRISE_TYPES:
+                url = build_apprise_url(channel_type, config)
+                if self._ap.add(url):
+                    self._channel_count += 1
+                    logger.info(f"注册通知渠道: {channel_type}")
+                else:
+                    logger.error(f"注册通知渠道失败: {channel_type} (URL 无效)")
+            else:
+                self._custom_channels.append((channel_type, config))
+                self._channel_count += 1
+                logger.info(f"注册自定义通知渠道: {channel_type}")
+        except ValueError as e:
+            logger.error(f"注册通知渠道失败: {e}")
 
     async def notify(self, title: str, content: str, images: list[str] | None = None):
         """向所有已注册渠道发送通知"""
-        if not self.notifiers:
+        if self._channel_count == 0:
             logger.warning("没有可用的通知渠道")
             return
 
-        for notifier in self.notifiers:
-            await notifier.send_text(title, content)
-            if images:
-                for img in images:
-                    await notifier.send_image(title, img)
+        # Apprise 渠道
+        if len(self._ap) > 0:
+            success = await self._ap.async_notify(
+                title=title,
+                body=content,
+                body_format=apprise.NotifyFormat.MARKDOWN,
+            )
+            if success:
+                logger.info(f"Apprise 通知发送成功: {title}")
+            else:
+                logger.error(f"Apprise 通知发送失败: {title}")
+
+        # 自定义渠道
+        for ch_type, config in self._custom_channels:
+            try:
+                await self._send_custom(ch_type, config, title, content)
+            except Exception as e:
+                logger.error(f"自定义渠道 {ch_type} 发送失败: {e}")
+
+    async def _send_custom(self, ch_type: str, config: dict, title: str, content: str):
+        """发送自定义渠道通知"""
+        if ch_type == "wecom":
+            await self._send_wecom(config, title, content)
+        elif ch_type == "serverchan":
+            await self._send_serverchan(config, title, content)
+        elif ch_type == "pushplus":
+            await self._send_pushplus(config, title, content)
+        else:
+            logger.warning(f"未知的自定义渠道类型: {ch_type}")
+
+    async def _send_wecom(self, config: dict, title: str, content: str):
+        """企业微信机器人 Webhook"""
+        key = config.get("webhook_key", "")
+        if not key:
+            raise ValueError("企业微信需要 webhook_key")
+
+        url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}"
+        text = f"## {title}\n\n{content}" if title else content
+        payload = {"msgtype": "markdown", "markdown": {"content": text}}
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=payload, timeout=30)
+            data = resp.json()
+            if data.get("errcode") != 0:
+                raise RuntimeError(f"企业微信发送失败: {data.get('errmsg')}")
+            logger.info(f"企业微信通知发送成功: {title}")
+
+    async def _send_serverchan(self, config: dict, title: str, content: str):
+        """Server酱推送"""
+        sendkey = config.get("sendkey", "")
+        if not sendkey:
+            raise ValueError("Server酱需要 sendkey")
+
+        url = f"https://sctapi.ftqq.com/{sendkey}.send"
+        payload = {"title": title or "通知", "desp": content}
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=payload, timeout=30)
+            data = resp.json()
+            if data.get("code") != 0:
+                raise RuntimeError(f"Server酱发送失败: {data.get('message')}")
+            logger.info(f"Server酱通知发送成功: {title}")
+
+    async def _send_pushplus(self, config: dict, title: str, content: str):
+        """PushPlus 推送"""
+        token = config.get("token", "")
+        if not token:
+            raise ValueError("PushPlus 需要 token")
+
+        url = "https://www.pushplus.plus/send"
+        payload = {
+            "token": token,
+            "title": title or "通知",
+            "content": content,
+            "template": "markdown",
+        }
+        topic = config.get("topic", "")
+        if topic:
+            payload["topic"] = topic
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=payload, timeout=30)
+            data = resp.json()
+            if data.get("code") != 200:
+                raise RuntimeError(f"PushPlus 发送失败: {data.get('msg')}")
+            logger.info(f"PushPlus 通知发送成功: {title}")

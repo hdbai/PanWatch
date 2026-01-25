@@ -1,18 +1,17 @@
 """PanWatch 统一服务入口 - Web 后台 + Agent 调度"""
 import logging
 import os
-import asyncio
 from contextlib import asynccontextmanager
 
 import uvicorn
 
 from src.web.database import init_db, SessionLocal
-from src.web.models import AgentConfig, Stock, StockAgent
+from src.web.models import AgentConfig, Stock, StockAgent, AIService, AIModel, NotifyChannel, AppSettings
 from src.web.log_handler import DBLogHandler
 from src.config import Settings, AppConfig, StockConfig
 from src.models.market import MarketCode
 from src.core.ai_client import AIClient
-from src.core.notifier import NotifierManager, TelegramNotifier
+from src.core.notifier import NotifierManager
 from src.core.scheduler import AgentScheduler
 from src.agents.base import AgentContext
 from src.agents.daily_report import DailyReportAgent
@@ -54,11 +53,19 @@ def setup_ssl():
 
 
 def setup_logging():
-    """配置日志收集到数据库"""
-    handler = DBLogHandler(level=logging.DEBUG)
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    logging.getLogger().addHandler(handler)
-    logging.getLogger().setLevel(logging.INFO)
+    """配置日志: 控制台 + 数据库"""
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    # 控制台输出
+    console = logging.StreamHandler()
+    console.setFormatter(logging.Formatter("%(asctime)s %(levelname)-5s [%(name)s] %(message)s", datefmt="%H:%M:%S"))
+    root.addHandler(console)
+
+    # 数据库持久化
+    db_handler = DBLogHandler(level=logging.DEBUG)
+    db_handler.setFormatter(logging.Formatter("%(message)s"))
+    root.addHandler(db_handler)
 
 
 def seed_agents():
@@ -132,29 +139,142 @@ def load_watchlist_for_agent(agent_name: str) -> list[StockConfig]:
         db.close()
 
 
-def build_context(agent_name: str) -> AgentContext:
-    """为指定 Agent 构建运行上下文"""
-    settings = Settings()
-    watchlist = load_watchlist_for_agent(agent_name)
+def _get_proxy() -> str:
+    """从 app_settings 获取 http_proxy"""
+    db = SessionLocal()
+    try:
+        setting = db.query(AppSettings).filter(AppSettings.key == "http_proxy").first()
+        return setting.value if setting and setting.value else ""
+    finally:
+        db.close()
 
-    ai_client = AIClient(
+
+def resolve_ai_model(agent_name: str, stock_agent_id: int | None = None) -> tuple[AIModel | None, AIService | None]:
+    """解析 AI 模型: stock_agent 覆盖 → agent 默认 → 系统默认(is_default=True)
+    返回 (model, service) 元组"""
+    db = SessionLocal()
+    try:
+        model_id = None
+
+        # 1. stock_agent 级别覆盖
+        if stock_agent_id:
+            sa = db.query(StockAgent).filter(StockAgent.id == stock_agent_id).first()
+            if sa and sa.ai_model_id:
+                model_id = sa.ai_model_id
+
+        # 2. agent 级别默认
+        if not model_id:
+            agent = db.query(AgentConfig).filter(AgentConfig.name == agent_name).first()
+            if agent and agent.ai_model_id:
+                model_id = agent.ai_model_id
+
+        # 3. 系统默认
+        if not model_id:
+            default_model = db.query(AIModel).filter(AIModel.is_default == True).first()
+            if default_model:
+                model_id = default_model.id
+
+        # 4. 回退：取第一个
+        if not model_id:
+            first_model = db.query(AIModel).first()
+            if first_model:
+                model_id = first_model.id
+
+        if not model_id:
+            return None, None
+
+        model = db.query(AIModel).filter(AIModel.id == model_id).first()
+        if not model:
+            return None, None
+
+        service = db.query(AIService).filter(AIService.id == model.service_id).first()
+        if model:
+            db.expunge(model)
+        if service:
+            db.expunge(service)
+        return model, service
+    finally:
+        db.close()
+
+
+def resolve_notify_channels(agent_name: str, stock_agent_id: int | None = None) -> list[NotifyChannel]:
+    """解析通知渠道: stock_agent 覆盖 → agent 默认 → 系统默认(is_default=True)"""
+    db = SessionLocal()
+    try:
+        channel_ids = None
+
+        # 1. stock_agent 级别覆盖
+        if stock_agent_id:
+            sa = db.query(StockAgent).filter(StockAgent.id == stock_agent_id).first()
+            if sa and sa.notify_channel_ids:
+                channel_ids = sa.notify_channel_ids
+
+        # 2. agent 级别默认
+        if channel_ids is None:
+            agent = db.query(AgentConfig).filter(AgentConfig.name == agent_name).first()
+            if agent and agent.notify_channel_ids:
+                channel_ids = agent.notify_channel_ids
+
+        # 3. 按 id 列表查询或取系统默认
+        if channel_ids:
+            channels = db.query(NotifyChannel).filter(
+                NotifyChannel.id.in_(channel_ids),
+                NotifyChannel.enabled == True,
+            ).all()
+        else:
+            channels = db.query(NotifyChannel).filter(
+                NotifyChannel.is_default == True,
+                NotifyChannel.enabled == True,
+            ).all()
+
+        for ch in channels:
+            db.expunge(ch)
+        return channels
+    finally:
+        db.close()
+
+
+def _build_notifier(channels: list[NotifyChannel]) -> NotifierManager:
+    """根据解析后的渠道列表构建 NotifierManager"""
+    notifier = NotifierManager()
+    for ch in channels:
+        notifier.add_channel(ch.type, ch.config or {})
+    return notifier
+
+
+def _build_ai_client(model: AIModel | None, service: AIService | None, proxy: str) -> AIClient:
+    """根据解析后的 model+service 构建 AIClient"""
+    if model and service:
+        return AIClient(
+            base_url=service.base_url,
+            api_key=service.api_key,
+            model=model.model,
+            proxy=proxy,
+        )
+    # 回退到环境变量配置
+    settings = Settings()
+    return AIClient(
         base_url=settings.ai_base_url,
         api_key=settings.ai_api_key,
         model=settings.ai_model,
-        proxy=settings.http_proxy,
+        proxy=proxy,
     )
 
-    notifier = NotifierManager()
-    if settings.notify_telegram_bot_token:
-        notifier.add(TelegramNotifier(
-            bot_token=settings.notify_telegram_bot_token,
-            chat_id=settings.notify_telegram_chat_id,
-            proxy=settings.http_proxy,
-            ca_cert=os.environ.get("SSL_CERT_FILE", ""),
-        ))
 
+def build_context(agent_name: str, stock_agent_id: int | None = None) -> AgentContext:
+    """为指定 Agent 构建运行上下文"""
+    settings = Settings()
+    watchlist = load_watchlist_for_agent(agent_name)
+    proxy = _get_proxy() or settings.http_proxy
+
+    model, service = resolve_ai_model(agent_name, stock_agent_id)
+    ai_client = _build_ai_client(model, service, proxy)
+    channels = resolve_notify_channels(agent_name, stock_agent_id)
+    notifier = _build_notifier(channels)
+
+    model_label = f"{service.name}/{model.model}" if model and service else ""
     config = AppConfig(settings=settings, watchlist=watchlist)
-    return AgentContext(ai_client=ai_client, notifier=notifier, config=config)
+    return AgentContext(ai_client=ai_client, notifier=notifier, config=config, model_label=model_label)
 
 
 # Agent 注册表
@@ -178,7 +298,6 @@ def build_scheduler() -> AgentScheduler:
                 continue
 
             agent_instance = agent_cls()
-            # 创建带动态 context 的包装
             context = build_context(cfg.name)
             sched.set_context(context)
             sched.register(agent_instance, cron=cfg.schedule)
@@ -188,30 +307,43 @@ def build_scheduler() -> AgentScheduler:
     return sched
 
 
+def _log_trigger_info(agent_name: str, stocks: list, model: AIModel | None, service: AIService | None, channels: list[NotifyChannel]):
+    """打印 Agent 触发时的上下文信息"""
+    stock_names = ", ".join(f"{s.name}({s.symbol})" if hasattr(s, 'symbol') else str(s) for s in stocks)
+    ai_info = f"{service.name}/{model.model}" if model and service else "未配置"
+    channel_info = ", ".join(ch.name for ch in channels) if channels else "无"
+    logger.info(f"[触发] Agent={agent_name} | 股票=[{stock_names}] | AI={ai_info} | 通知=[{channel_info}]")
+
+
 async def trigger_agent(agent_name: str) -> str:
     """手动触发 Agent 执行（所有关联股票）"""
     agent_cls = AGENT_REGISTRY.get(agent_name)
     if not agent_cls:
         raise ValueError(f"Agent {agent_name} 未注册实际实现")
 
-    context = build_context(agent_name)
-    agent = agent_cls()
-
-    watchlist = context.watchlist
+    watchlist = load_watchlist_for_agent(agent_name)
     if not watchlist:
         return f"Agent {agent_name} 没有关联的自选股"
 
+    model, service = resolve_ai_model(agent_name)
+    channels = resolve_notify_channels(agent_name)
+    _log_trigger_info(agent_name, watchlist, model, service, channels)
+
+    context = build_context(agent_name)
+    agent = agent_cls()
     result = await agent.run(context)
     return result.content
 
 
-async def trigger_agent_for_stock(agent_name: str, stock) -> str:
+async def trigger_agent_for_stock(agent_name: str, stock, stock_agent_id: int | None = None) -> str:
     """手动触发 Agent 执行（单只股票）"""
     agent_cls = AGENT_REGISTRY.get(agent_name)
     if not agent_cls:
         raise ValueError(f"Agent {agent_name} 未注册实际实现")
 
     settings = Settings()
+    proxy = _get_proxy() or settings.http_proxy
+
     try:
         market = MarketCode(stock.market)
     except ValueError:
@@ -225,24 +357,16 @@ async def trigger_agent_for_stock(agent_name: str, stock) -> str:
         quantity=stock.quantity,
     )
 
-    ai_client = AIClient(
-        base_url=settings.ai_base_url,
-        api_key=settings.ai_api_key,
-        model=settings.ai_model,
-        proxy=settings.http_proxy,
-    )
+    model, service = resolve_ai_model(agent_name, stock_agent_id)
+    channels = resolve_notify_channels(agent_name, stock_agent_id)
+    _log_trigger_info(agent_name, [stock], model, service, channels)
 
-    notifier = NotifierManager()
-    if settings.notify_telegram_bot_token:
-        notifier.add(TelegramNotifier(
-            bot_token=settings.notify_telegram_bot_token,
-            chat_id=settings.notify_telegram_chat_id,
-            proxy=settings.http_proxy,
-            ca_cert=os.environ.get("SSL_CERT_FILE", ""),
-        ))
+    ai_client = _build_ai_client(model, service, proxy)
+    notifier = _build_notifier(channels)
 
+    model_label = f"{service.name}/{model.model}" if model and service else ""
     config = AppConfig(settings=settings, watchlist=[stock_config])
-    context = AgentContext(ai_client=ai_client, notifier=notifier, config=config)
+    context = AgentContext(ai_client=ai_client, notifier=notifier, config=config, model_label=model_label)
     agent = agent_cls()
 
     result = await agent.run(context)
@@ -251,7 +375,12 @@ async def trigger_agent_for_stock(agent_name: str, stock) -> str:
 
 @asynccontextmanager
 async def lifespan(app):
-    """应用生命周期: 启动调度器"""
+    """应用生命周期: 初始化 + 启动调度器"""
+    init_db()
+    setup_logging()
+    setup_ssl()
+    seed_agents()
+
     global scheduler
     scheduler = build_scheduler()
     scheduler.start()
@@ -261,16 +390,19 @@ async def lifespan(app):
     logger.info("Agent 调度器已关闭")
 
 
+# 模块级 app 实例，供 uvicorn reload 使用
+from src.web.app import app  # noqa: E402
+app.router.lifespan_context = lifespan
+
+
 if __name__ == "__main__":
-    init_db()
-    setup_logging()
-    setup_ssl()
-    seed_agents()
-
-    # 注入 lifespan 到 app
-    from src.web.app import app
-    app.router.lifespan_context = lifespan
-
     print("盯盘侠启动: http://127.0.0.1:8000")
     print("API 文档: http://127.0.0.1:8000/docs")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        "server:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        reload_dirs=["src", "."],
+        reload_excludes=["data/*", "frontend/*", ".claude/*"],
+    )
