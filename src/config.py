@@ -38,12 +38,6 @@ class StockConfig:
     symbol: str
     name: str
     market: MarketCode
-    cost_price: float | None = None
-    quantity: int | None = None
-
-    @property
-    def has_position(self) -> bool:
-        return self.cost_price is not None and self.quantity is not None
 
 
 @dataclass
@@ -70,8 +64,6 @@ def load_watchlist(path: str | Path = "config/watchlist.yaml") -> list[StockConf
                 symbol=stock["symbol"],
                 name=stock["name"],
                 market=market_code,
-                cost_price=stock.get("cost_price"),
-                quantity=stock.get("quantity"),
             ))
 
     return stocks

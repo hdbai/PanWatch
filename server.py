@@ -13,7 +13,7 @@ from src.models.market import MarketCode
 from src.core.ai_client import AIClient
 from src.core.notifier import NotifierManager
 from src.core.scheduler import AgentScheduler
-from src.agents.base import AgentContext
+from src.agents.base import AgentContext, PortfolioInfo, AccountInfo, PositionInfo
 from src.agents.daily_report import DailyReportAgent
 from src.agents.news_digest import NewsDigestAgent
 from src.agents.chart_analyst import ChartAnalystAgent
@@ -205,10 +205,115 @@ def load_watchlist_for_agent(agent_name: str) -> list[StockConfig]:
                 symbol=s.symbol,
                 name=s.name,
                 market=market,
-                cost_price=s.cost_price,
-                quantity=s.quantity,
             ))
         return result
+    finally:
+        db.close()
+
+
+def load_portfolio_for_agent(agent_name: str) -> PortfolioInfo:
+    """从数据库加载某个 Agent 关联股票的持仓信息（包括多账户）"""
+    from src.web.models import Account, Position
+
+    db = SessionLocal()
+    try:
+        # 获取 Agent 关联的股票 ID
+        stock_agents = db.query(StockAgent).filter(StockAgent.agent_name == agent_name).all()
+        stock_ids = set(sa.stock_id for sa in stock_agents)
+        if not stock_ids:
+            return PortfolioInfo()
+
+        # 获取所有启用的账户
+        accounts = db.query(Account).filter(Account.enabled == True).all()
+
+        account_infos = []
+        for acc in accounts:
+            # 获取该账户中属于关联股票的持仓
+            positions = db.query(Position).filter(
+                Position.account_id == acc.id,
+                Position.stock_id.in_(stock_ids),
+            ).all()
+
+            position_infos = []
+            for pos in positions:
+                stock = pos.stock
+                if not stock or not stock.enabled:
+                    continue
+                try:
+                    market = MarketCode(stock.market)
+                except ValueError:
+                    market = MarketCode.CN
+
+                position_infos.append(PositionInfo(
+                    account_id=acc.id,
+                    account_name=acc.name,
+                    stock_id=stock.id,
+                    symbol=stock.symbol,
+                    name=stock.name,
+                    market=market,
+                    cost_price=pos.cost_price,
+                    quantity=pos.quantity,
+                    invested_amount=pos.invested_amount,
+                ))
+
+            account_infos.append(AccountInfo(
+                id=acc.id,
+                name=acc.name,
+                available_funds=acc.available_funds,
+                positions=position_infos,
+            ))
+
+        return PortfolioInfo(accounts=account_infos)
+    finally:
+        db.close()
+
+
+def load_portfolio_for_stock(stock_id: int) -> PortfolioInfo:
+    """从数据库加载单只股票的持仓信息"""
+    from src.web.models import Account, Position
+
+    db = SessionLocal()
+    try:
+        stock = db.query(Stock).filter(Stock.id == stock_id).first()
+        if not stock:
+            return PortfolioInfo()
+
+        try:
+            market = MarketCode(stock.market)
+        except ValueError:
+            market = MarketCode.CN
+
+        accounts = db.query(Account).filter(Account.enabled == True).all()
+
+        account_infos = []
+        for acc in accounts:
+            pos = db.query(Position).filter(
+                Position.account_id == acc.id,
+                Position.stock_id == stock_id,
+            ).first()
+
+            position_infos = []
+            if pos:
+                position_infos.append(PositionInfo(
+                    account_id=acc.id,
+                    account_name=acc.name,
+                    stock_id=stock.id,
+                    symbol=stock.symbol,
+                    name=stock.name,
+                    market=market,
+                    cost_price=pos.cost_price,
+                    quantity=pos.quantity,
+                    invested_amount=pos.invested_amount,
+                ))
+
+            account_infos.append(AccountInfo(
+                id=acc.id,
+                name=acc.name,
+                available_funds=acc.available_funds,
+                positions=position_infos,
+            ))
+
+        return PortfolioInfo(accounts=account_infos)
     finally:
         db.close()
 
@@ -339,6 +444,7 @@ def build_context(agent_name: str, stock_agent_id: int | None = None) -> AgentCo
     """为指定 Agent 构建运行上下文"""
     settings = Settings()
     watchlist = load_watchlist_for_agent(agent_name)
+    portfolio = load_portfolio_for_agent(agent_name)
     proxy = _get_proxy() or settings.http_proxy
 
     model, service = resolve_ai_model(agent_name, stock_agent_id)
@@ -348,7 +454,13 @@ def build_context(agent_name: str, stock_agent_id: int | None = None) -> AgentCo
 
     model_label = f"{service.name}/{model.model}" if model and service else ""
     config = AppConfig(settings=settings, watchlist=watchlist)
-    return AgentContext(ai_client=ai_client, notifier=notifier, config=config, model_label=model_label)
+    return AgentContext(
+        ai_client=ai_client,
+        notifier=notifier,
+        config=config,
+        portfolio=portfolio,
+        model_label=model_label,
+    )
 
 
 # Agent 注册表
@@ -429,9 +541,10 @@ async def trigger_agent_for_stock(agent_name: str, stock, stock_agent_id: int | 
         symbol=stock.symbol,
         name=stock.name,
         market=market,
-        cost_price=stock.cost_price,
-        quantity=stock.quantity,
     )
+
+    # 加载该股票的持仓信息
+    portfolio = load_portfolio_for_stock(stock.id)
 
     model, service = resolve_ai_model(agent_name, stock_agent_id)
     channels = resolve_notify_channels(agent_name, stock_agent_id)
@@ -442,7 +555,13 @@ async def trigger_agent_for_stock(agent_name: str, stock, stock_agent_id: int | 
 
     model_label = f"{service.name}/{model.model}" if model and service else ""
     config = AppConfig(settings=settings, watchlist=[stock_config])
-    context = AgentContext(ai_client=ai_client, notifier=notifier, config=config, model_label=model_label)
+    context = AgentContext(
+        ai_client=ai_client,
+        notifier=notifier,
+        config=config,
+        portfolio=portfolio,
+        model_label=model_label,
+    )
     agent = agent_cls()
 
     result = await agent.run(context)

@@ -73,17 +73,33 @@ class ChartAnalystAgent(BaseAgent):
         lines.append(f"## 分析时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}")
         lines.append(f"## K线周期：{self._period_label(data.get('period', 'daily'))}\n")
 
-        # 股票列表
+        # 股票列表（含持仓信息）
         lines.append("## 待分析股票")
         screenshots: list[ChartScreenshot] = data.get("screenshots", [])
 
         if screenshots:
             for i, shot in enumerate(screenshots, 1):
-                lines.append(f"{i}. {shot.name}({shot.symbol}) - 见图{i}")
+                position = context.portfolio.get_aggregated_position(shot.symbol)
+                if position:
+                    lines.append(
+                        f"{i}. {shot.name}({shot.symbol}) - 见图{i}"
+                        f" | 持仓{position['total_quantity']}股 成本{position['avg_cost']:.2f}"
+                    )
+                else:
+                    lines.append(f"{i}. {shot.name}({shot.symbol}) - 见图{i} | 未持仓")
         else:
             lines.append("- 无截图")
 
-        lines.append("\n请根据上述股票的 K 线图进行技术分析。")
+        # 账户资金概况
+        if context.portfolio.accounts:
+            lines.append("\n## 资金状况")
+            total_funds = context.portfolio.total_available_funds
+            total_cost = context.portfolio.total_cost
+            if total_funds > 0 or total_cost > 0:
+                lines.append(f"- 总可用资金: {total_funds:.0f}元")
+                lines.append(f"- 总持仓成本: {total_cost:.0f}元")
+
+        lines.append("\n请根据上述股票的 K 线图进行技术分析，结合持仓情况给出操作建议。")
 
         user_content = "\n".join(lines)
         return system_prompt, user_content

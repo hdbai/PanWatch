@@ -6,8 +6,97 @@ from datetime import datetime
 from src.core.ai_client import AIClient
 from src.core.notifier import NotifierManager
 from src.config import AppConfig, StockConfig
+from src.models.market import MarketCode
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PositionInfo:
+    """单个持仓信息"""
+    account_id: int
+    account_name: str
+    stock_id: int
+    symbol: str
+    name: str
+    market: MarketCode
+    cost_price: float
+    quantity: int
+    invested_amount: float | None = None
+
+    @property
+    def cost_value(self) -> float:
+        """持仓成本"""
+        return self.cost_price * self.quantity
+
+
+@dataclass
+class AccountInfo:
+    """账户信息"""
+    id: int
+    name: str
+    available_funds: float
+    positions: list[PositionInfo] = field(default_factory=list)
+
+    @property
+    def total_cost(self) -> float:
+        """账户总持仓成本"""
+        return sum(p.cost_value for p in self.positions)
+
+
+@dataclass
+class PortfolioInfo:
+    """持仓组合信息"""
+    accounts: list[AccountInfo] = field(default_factory=list)
+
+    @property
+    def total_available_funds(self) -> float:
+        """总可用资金"""
+        return sum(a.available_funds for a in self.accounts)
+
+    @property
+    def total_cost(self) -> float:
+        """总持仓成本"""
+        return sum(a.total_cost for a in self.accounts)
+
+    @property
+    def all_positions(self) -> list[PositionInfo]:
+        """所有持仓列表"""
+        result = []
+        for acc in self.accounts:
+            result.extend(acc.positions)
+        return result
+
+    def get_positions_for_stock(self, symbol: str) -> list[PositionInfo]:
+        """获取某只股票在各账户的持仓"""
+        return [p for p in self.all_positions if p.symbol == symbol]
+
+    def get_aggregated_position(self, symbol: str) -> dict | None:
+        """
+        获取某只股票的汇总持仓（合并所有账户）
+        返回: {"symbol", "name", "total_quantity", "avg_cost", "total_cost", "positions"}
+        """
+        positions = self.get_positions_for_stock(symbol)
+        if not positions:
+            return None
+
+        total_quantity = sum(p.quantity for p in positions)
+        total_cost = sum(p.cost_value for p in positions)
+        avg_cost = total_cost / total_quantity if total_quantity > 0 else 0
+
+        return {
+            "symbol": symbol,
+            "name": positions[0].name,
+            "market": positions[0].market,
+            "total_quantity": total_quantity,
+            "avg_cost": avg_cost,
+            "total_cost": total_cost,
+            "positions": positions,
+        }
+
+    def has_position(self, symbol: str) -> bool:
+        """是否持有某只股票"""
+        return any(p.symbol == symbol for p in self.all_positions)
 
 
 @dataclass
@@ -16,6 +105,7 @@ class AgentContext:
     ai_client: AIClient
     notifier: NotifierManager
     config: AppConfig
+    portfolio: PortfolioInfo = field(default_factory=PortfolioInfo)
     model_label: str = ""  # e.g. "智谱/glm-4-flash"
 
     @property

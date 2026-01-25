@@ -73,11 +73,15 @@ class NewsDigestAgent(BaseAgent):
         lines = []
         lines.append(f"## 时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
 
-        # 自选股列表
+        # 自选股列表（标记持仓）
         lines.append("## 自选股")
         watchlist_map = {s.symbol: s for s in context.watchlist}
         for stock in context.watchlist:
-            lines.append(f"- {stock.name}({stock.symbol})")
+            position = context.portfolio.get_aggregated_position(stock.symbol)
+            if position:
+                lines.append(f"- {stock.name}({stock.symbol}) [持仓{position['total_quantity']}股]")
+            else:
+                lines.append(f"- {stock.name}({stock.symbol})")
 
         # 自选股相关新闻
         related_news: list[NewsItem] = data.get("related_news", [])

@@ -77,17 +77,32 @@ class DailyReportAgent(BaseAgent):
                 f"成交额:{stock.turnover/1e8:.2f}亿"
             )
 
-            # 持仓信息
-            config = watchlist_map.get(stock.symbol)
-            if config and config.has_position:
-                pnl = (stock.current_price - config.cost_price) * config.quantity
-                pnl_pct = (stock.current_price - config.cost_price) / config.cost_price * 100
-                line += f" | 持仓{config.quantity}股 成本{config.cost_price:.2f} 浮盈{pnl:+.0f}元({pnl_pct:+.1f}%)"
+            # 持仓信息（从 portfolio 获取汇总）
+            position = context.portfolio.get_aggregated_position(stock.symbol)
+            if position:
+                total_qty = position["total_quantity"]
+                avg_cost = position["avg_cost"]
+                market_value = stock.current_price * total_qty
+                pnl = market_value - position["total_cost"]
+                pnl_pct = (stock.current_price - avg_cost) / avg_cost * 100 if avg_cost > 0 else 0
+                line += f" | 持仓{total_qty}股 成本{avg_cost:.2f} 浮盈{pnl:+.0f}元({pnl_pct:+.1f}%)"
 
             lines.append(line)
 
         if not data["stocks"]:
             lines.append("- 今日无行情数据")
+
+        # 账户资金概况
+        if context.portfolio.accounts:
+            lines.append("\n## 账户概况")
+            for acc in context.portfolio.accounts:
+                if acc.positions or acc.available_funds > 0:
+                    acc_cost = acc.total_cost
+                    lines.append(f"- {acc.name}: 持仓成本{acc_cost:.0f}元 可用资金{acc.available_funds:.0f}元")
+            total_funds = context.portfolio.total_available_funds
+            total_cost = context.portfolio.total_cost
+            if total_funds > 0 or total_cost > 0:
+                lines.append(f"- 合计: 总持仓成本{total_cost:.0f}元 总可用资金{total_funds:.0f}元")
 
         user_content = "\n".join(lines)
         return system_prompt, user_content
