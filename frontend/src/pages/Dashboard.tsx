@@ -4,8 +4,6 @@ import ReactMarkdown from 'react-markdown'
 import {
   TrendingUp,
   RefreshCw,
-  Bot,
-  Zap,
   ArrowUpRight,
   ArrowDownRight,
   Wallet,
@@ -65,18 +63,46 @@ interface AccountSummary {
   total_pnl_pct: number
 }
 
-interface AlertInfo {
+interface SuggestionInfo {
+  action: string  // buy/add/reduce/sell/hold/watch
+  action_label: string
+  signal: string
+  reason: string
+  should_alert: boolean
+  raw?: string
+}
+
+interface KlineSummary {
+  trend: string
+  macd_status: string
+  recent_5_up: number
+  change_5d: number | null
+  change_20d: number | null
+  ma5: number | null
+  ma10: number | null
+  ma20: number | null
+  support: number | null
+  resistance: number | null
+}
+
+interface MonitorStock {
   symbol: string
   name: string
-  alert_type: string
+  market: string
   current_price: number
   change_pct: number
-  message: string
+  open_price: number | null
+  high_price: number | null
+  low_price: number | null
+  volume: number | null
+  turnover: number | null
+  alert_type: string | null
   has_position: boolean
   cost_price: number | null
   pnl_pct: number | null
   trading_style: string | null
-  suggestion: string | null
+  kline: KlineSummary | null
+  suggestion: SuggestionInfo | null
 }
 
 interface Stock {
@@ -122,8 +148,9 @@ export default function DashboardPage() {
   const [quotes, setQuotes] = useState<Record<string, StockQuote>>({})
   const hasWatchlist = stocks.filter(s => s.enabled).length > 0
 
-  // Alerts
-  const [alerts, setAlerts] = useState<AlertInfo[]>([])
+  // Monitor stocks
+  const [monitorStocks, setMonitorStocks] = useState<MonitorStock[]>([])
+  const [availableFunds, setAvailableFunds] = useState<number>(0)
   const [scanning, setScanning] = useState(false)
   const [enableAIAnalysis, setEnableAIAnalysis] = useState(true)
 
@@ -246,11 +273,12 @@ export default function DashboardPage() {
     setScanning(true)
     try {
       const url = enableAIAnalysis ? '/agents/intraday/scan?analyze=true' : '/agents/intraday/scan'
-      const result = await fetchAPI<{ alerts: AlertInfo[] }>(url, { method: 'POST' })
-      setAlerts(result.alerts)
+      const result = await fetchAPI<{ stocks: MonitorStock[]; available_funds: number }>(url, { method: 'POST' })
+      setMonitorStocks(result.stocks || [])
+      setAvailableFunds(result.available_funds || 0)
       setLastRefreshTime(new Date())
     } catch (e) {
-      console.error('扫描异动失败:', e)
+      console.error('扫描失败:', e)
     } finally {
       setScanning(false)
     }
@@ -482,14 +510,19 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Intraday Alerts */}
+      {/* Intraday Monitor */}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-[15px] font-semibold text-foreground flex items-center gap-2">
-            <Zap className="w-4 h-4 text-amber-500" />
-            实时异动
-            {alerts.length > 0 && (
-              <Badge variant="secondary" className="text-[10px]">{alerts.length} 只</Badge>
+            <Activity className="w-4 h-4 text-primary" />
+            盘中监控
+            {monitorStocks.length > 0 && (
+              <Badge variant="secondary" className="text-[10px]">{monitorStocks.length} 只</Badge>
+            )}
+            {availableFunds > 0 && (
+              <span className="text-[11px] text-muted-foreground ml-2">
+                可用: ¥{formatMoney(availableFunds)}
+              </span>
             )}
           </h2>
           {hasWatchlist && (
@@ -497,97 +530,126 @@ export default function DashboardPage() {
               {scanning ? (
                 <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
               ) : (
-                <Activity className="w-3.5 h-3.5" />
+                <RefreshCw className="w-3.5 h-3.5" />
               )}
-              扫描
+              刷新
             </Button>
           )}
         </div>
 
         {!hasWatchlist ? (
           <div className="card p-6 text-center">
-            <div className="w-12 h-12 rounded-2xl bg-amber-500/10 flex items-center justify-center mx-auto mb-3">
-              <Zap className="w-5 h-5 text-amber-500" />
+            <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-3">
+              <Activity className="w-5 h-5 text-primary" />
             </div>
-            <p className="text-[14px] font-medium text-foreground mb-1">添加自选股后可查看异动</p>
-            <p className="text-[12px] text-muted-foreground mb-4">系统会自动监控自选股的涨跌、放量等异动</p>
+            <p className="text-[14px] font-medium text-foreground mb-1">启用盘中监控</p>
+            <p className="text-[12px] text-muted-foreground mb-4">为股票启用「盘中监测」Agent 后可查看实时分析</p>
             <Button size="sm" onClick={() => navigate('/portfolio')}>
               <Plus className="w-4 h-4" /> 添加自选股
             </Button>
           </div>
-        ) : alerts.length === 0 ? (
+        ) : monitorStocks.length === 0 ? (
           <div className="card p-6 text-center">
-            <p className="text-[13px] text-muted-foreground">暂无异动，市场平静</p>
+            <p className="text-[13px] text-muted-foreground">点击刷新获取监控数据</p>
           </div>
         ) : (
-          <div className="card p-4 border-l-4 border-l-amber-500">
-            <div className="space-y-3">
-              {alerts.slice(0, 5).map(alert => {
-                const alertTypeLabels: Record<string, { label: string; color: string }> = {
-                  price_surge: { label: '急涨', color: 'text-rose-500 bg-rose-500/10' },
-                  price_drop: { label: '急跌', color: 'text-emerald-500 bg-emerald-500/10' },
-                  volume_spike: { label: '放量', color: 'text-blue-500 bg-blue-500/10' },
-                  near_stop_loss: { label: '止损预警', color: 'text-red-600 bg-red-500/10' },
-                  near_take_profit: { label: '止盈提醒', color: 'text-amber-600 bg-amber-500/10' },
-                }
-                const styleLabels: Record<string, string> = { short: '短线', swing: '波段', long: '长线' }
-                const typeInfo = alertTypeLabels[alert.alert_type] || { label: alert.alert_type, color: 'text-muted-foreground bg-accent' }
-                const changeColor = alert.change_pct > 0 ? 'text-rose-500' : alert.change_pct < 0 ? 'text-emerald-500' : 'text-muted-foreground'
+          <div className="space-y-3">
+            {monitorStocks.map(stock => {
+              const actionColors: Record<string, string> = {
+                buy: 'bg-rose-500 text-white',
+                add: 'bg-rose-400 text-white',
+                reduce: 'bg-emerald-500 text-white',
+                sell: 'bg-emerald-600 text-white',
+                hold: 'bg-amber-500 text-white',
+                watch: 'bg-slate-500 text-white',
+              }
+              const styleLabels: Record<string, string> = { short: '短线', swing: '波段', long: '长线' }
+              const changeColor = stock.change_pct > 0 ? 'text-rose-500' : stock.change_pct < 0 ? 'text-emerald-500' : 'text-muted-foreground'
+              const suggestion = stock.suggestion
 
-                return (
-                  <div key={alert.symbol} className="p-3 rounded-lg bg-accent/30 hover:bg-accent/50 transition-colors">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-[12px] font-semibold text-foreground">{alert.symbol}</span>
-                        <span className="text-[12px] text-muted-foreground">{alert.name}</span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${typeInfo.color}`}>
-                          {typeInfo.label}
+              return (
+                <div key={stock.symbol} className="card p-4">
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-[13px] font-semibold text-foreground">{stock.symbol}</span>
+                      <span className="text-[12px] text-muted-foreground">{stock.name}</span>
+                      {stock.alert_type && (
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                          stock.alert_type === '急涨' ? 'bg-rose-500/10 text-rose-500' : 'bg-emerald-500/10 text-emerald-500'
+                        }`}>
+                          {stock.alert_type}
                         </span>
-                        {alert.has_position && alert.trading_style && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">
-                            {styleLabels[alert.trading_style] || '波段'}
-                          </span>
-                        )}
+                      )}
+                      {stock.has_position && stock.trading_style && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+                          {styleLabels[stock.trading_style] || '波段'}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="text-right">
+                        <div className={`font-mono text-[14px] font-medium ${changeColor}`}>
+                          {stock.current_price?.toFixed(2) || '--'}
+                        </div>
+                        <div className={`font-mono text-[11px] ${changeColor}`}>
+                          {stock.change_pct >= 0 ? '+' : ''}{stock.change_pct?.toFixed(2) || '0.00'}%
+                        </div>
                       </div>
-                      <div className="flex items-center gap-4">
-                        <div className="text-right">
-                          <div className={`font-mono text-[13px] font-medium ${changeColor}`}>
-                            {alert.current_price.toFixed(2)}
-                          </div>
-                          <div className={`font-mono text-[11px] ${changeColor}`}>
-                            {alert.change_pct >= 0 ? '+' : ''}{alert.change_pct.toFixed(2)}%
+                      {stock.has_position && stock.pnl_pct != null && (
+                        <div className="text-right min-w-[60px]">
+                          <div className="text-[10px] text-muted-foreground">盈亏</div>
+                          <div className={`font-mono text-[13px] font-medium ${stock.pnl_pct >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                            {stock.pnl_pct >= 0 ? '+' : ''}{stock.pnl_pct.toFixed(2)}%
                           </div>
                         </div>
-                        {alert.has_position && alert.pnl_pct != null && (
-                          <div className="text-right min-w-[60px]">
-                            <div className="text-[10px] text-muted-foreground">盈亏</div>
-                            <div className={`font-mono text-[12px] ${alert.pnl_pct >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                              {alert.pnl_pct >= 0 ? '+' : ''}{alert.pnl_pct.toFixed(2)}%
-                            </div>
-                          </div>
-                        )}
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Technical Info */}
+                  {stock.kline && (
+                    <div className="flex flex-wrap gap-2 mb-3 text-[11px]">
+                      <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
+                        {stock.kline.trend}
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
+                        {stock.kline.macd_status}
+                      </span>
+                      {stock.kline.support && (
+                        <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600">
+                          支撑 {stock.kline.support.toFixed(2)}
+                        </span>
+                      )}
+                      {stock.kline.resistance && (
+                        <span className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-600">
+                          压力 {stock.kline.resistance.toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* AI Suggestion */}
+                  {suggestion && (
+                    <div className="pt-3 border-t border-border/30">
+                      <div className="flex items-start gap-3">
+                        <span className={`text-[11px] px-2 py-1 rounded font-medium ${actionColors[suggestion.action] || 'bg-slate-500 text-white'}`}>
+                          {suggestion.action_label}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          {suggestion.signal && (
+                            <p className="text-[12px] font-medium text-foreground mb-0.5">{suggestion.signal}</p>
+                          )}
+                          {suggestion.reason && (
+                            <p className="text-[11px] text-muted-foreground">{suggestion.reason}</p>
+                          )}
+                        </div>
                       </div>
                     </div>
-                    {alert.suggestion && (
-                      <div className="mt-2 pt-2 border-t border-border/30">
-                        <div className="flex items-start gap-2">
-                          <Bot className="w-3.5 h-3.5 text-primary mt-0.5 flex-shrink-0" />
-                          <p className="text-[12px] text-foreground whitespace-pre-line">{alert.suggestion}</p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-              {alerts.length > 5 && (
-                <button
-                  onClick={() => navigate('/portfolio')}
-                  className="w-full text-center py-2 text-[12px] text-primary hover:underline"
-                >
-                  查看全部 {alerts.length} 条异动
-                </button>
-              )}
-            </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
