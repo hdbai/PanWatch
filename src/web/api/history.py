@@ -21,6 +21,7 @@ class HistoryResponse(BaseModel):
     analysis_date: str
     title: str
     content: str
+    suggestions: dict | None = None  # 个股建议 {symbol: {action, action_label, reason, should_alert}}
     created_at: str
     updated_at: str
 
@@ -53,6 +54,7 @@ def list_history(
             analysis_date=r.analysis_date,
             title=r.title or "",
             content=r.content,
+            suggestions=r.raw_data.get("suggestions") if r.raw_data else None,
             created_at=r.created_at.isoformat() if r.created_at else "",
             updated_at=r.updated_at.isoformat() if r.updated_at else "",
         )
@@ -75,6 +77,7 @@ def get_history_detail(history_id: int, db: Session = Depends(get_db)) -> Histor
         analysis_date=record.analysis_date,
         title=record.title or "",
         content=record.content,
+        suggestions=record.raw_data.get("suggestions") if record.raw_data else None,
         created_at=record.created_at.isoformat() if record.created_at else "",
         updated_at=record.updated_at.isoformat() if record.updated_at else "",
     )

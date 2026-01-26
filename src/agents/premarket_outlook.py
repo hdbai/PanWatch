@@ -1,5 +1,6 @@
 """盘前分析 Agent - 开盘前展望今日走势"""
 import logging
+import re
 from datetime import datetime, date, timedelta
 from pathlib import Path
 
@@ -11,6 +12,15 @@ from src.core.analysis_history import save_analysis, get_latest_analysis
 from src.models.market import MarketCode
 
 logger = logging.getLogger(__name__)
+
+# 盘前建议类型映射
+PREMARKET_ACTION_MAP = {
+    "准备建仓": {"action": "buy", "label": "准备建仓"},
+    "准备加仓": {"action": "add", "label": "准备加仓"},
+    "准备减仓": {"action": "reduce", "label": "准备减仓"},
+    "设置预警": {"action": "alert", "label": "设置预警"},
+    "观望": {"action": "watch", "label": "观望"},
+}
 
 PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "premarket_outlook.txt"
 
@@ -186,9 +196,48 @@ class PremarketOutlookAgent(BaseAgent):
         user_content = "\n".join(lines)
         return system_prompt, user_content
 
+    def _parse_suggestions(self, content: str, watchlist: list) -> dict[str, dict]:
+        """
+        从 AI 响应中解析个股建议
+        返回: {symbol: {action, action_label, reason, should_alert}}
+        """
+        suggestions = {}
+        symbol_set = {s.symbol for s in watchlist}
+
+        # 匹配格式: 「股票代码」建议类型：理由
+        # 也支持 【】 和其他变体
+        patterns = [
+            r'[「【](\d{5,6})[」】]\s*(准备建仓|准备加仓|准备减仓|设置预警|观望)[：:]\s*(.+?)(?=\n[「【]|\n\n|\Z)',
+            r'[「【]([A-Z]+)[」】]\s*(准备建仓|准备加仓|准备减仓|设置预警|观望)[：:]\s*(.+?)(?=\n[「【]|\n\n|\Z)',
+        ]
+
+        for pattern in patterns:
+            for match in re.finditer(pattern, content, re.DOTALL):
+                symbol = match.group(1)
+                action_text = match.group(2)
+                reason = match.group(3).strip()
+
+                # 验证是否在自选股列表中
+                if symbol not in symbol_set:
+                    continue
+
+                action_info = PREMARKET_ACTION_MAP.get(action_text, {"action": "watch", "label": "观望"})
+                suggestions[symbol] = {
+                    "action": action_info["action"],
+                    "action_label": action_info["label"],
+                    "reason": reason[:100],  # 限制长度
+                    "should_alert": action_info["action"] in ["buy", "add", "reduce"],
+                }
+
+        return suggestions
+
     async def analyze(self, context: AgentContext, data: dict) -> AnalysisResult:
         """调用 AI 分析并保存到历史"""
         result = await super().analyze(context, data)
+
+        # 解析个股建议
+        suggestions = self._parse_suggestions(result.content, context.watchlist)
+        result.raw_data["suggestions"] = suggestions
 
         # 保存到历史记录
         save_analysis(
@@ -199,8 +248,9 @@ class PremarketOutlookAgent(BaseAgent):
             raw_data={
                 "us_indices": data.get("us_indices"),
                 "timestamp": data.get("timestamp"),
+                "suggestions": suggestions,
             },
         )
-        logger.info(f"盘前分析已保存到历史记录")
+        logger.info(f"盘前分析已保存到历史记录，包含 {len(suggestions)} 条建议")
 
         return result

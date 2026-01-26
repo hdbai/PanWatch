@@ -1,51 +1,84 @@
 # 盯盘侠 PanWatch
 
-AI 驱动的股票监控助手，支持 A 股、港股、美股。
+**私有部署的 AI 股票助手** — 实时行情监控、智能技术分析、多账户持仓管理
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)](https://hub.docker.com/r/sunxiao0721/panwatch)
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
+| 持仓管理 | AI 建议 |
+|:---:|:---:|
+| ![Portfolio](./docs/screenshots/portfolio.png) | ![Suggestion](./docs/screenshots/suggestion.png) |
+
 <details>
-<summary>更多截图</summary>
-
-**持仓管理**
-![Portfolio](./docs/screenshots/portfolio.png)
-
-**移动端**
+<summary>移动端截图</summary>
 
 <img src="./docs/screenshots/mobile.png" width="375" />
 
 </details>
 
-## 功能特点
+## 为什么选择盯盘侠？
 
-- **多市场支持**：A 股、港股、美股实时行情
-- **智能 Agent**：盘后日报、盘中监测、盘前分析、新闻速递
-- **多账户管理**：支持多账户持仓跟踪
-- **AI 分析**：接入 OpenAI 兼容 API，智能分析持仓
-- **多渠道通知**：Telegram、企业微信、钉钉、飞书等
-- **PWA 支持**：可添加到手机桌面使用
+- **数据私有** — 自托管部署，持仓数据不经过任何第三方
+- **AI 原生** — 不是简单的指标堆砌，而是让 AI 理解你的持仓、风格和目标
+- **开箱即用** — Docker 一键部署，5 分钟完成配置
+
+## 核心功能
+
+<details>
+<summary><b>智能 Agent 系统</b></summary>
+
+| Agent | 触发时机 | 功能 |
+|-------|---------|------|
+| **盘前分析** | 每日开盘前 | 综合隔夜美股、新闻消息、技术形态，给出今日操作策略 |
+| **盘中监测** | 交易时段实时 | 监控异动信号，RSI/KDJ/MACD 共振时推送提醒 |
+| **盘后日报** | 每日收盘后 | 复盘当日走势，分析资金流向，规划次日操作 |
+| **新闻速递** | 定时采集 | 抓取财经新闻，AI 筛选与持仓相关的重要信息 |
+
+</details>
+
+<details>
+<summary><b>专业技术分析</b></summary>
+
+- **趋势指标**：MA 多空排列、MACD 金叉死叉、布林带突破
+- **动量指标**：RSI 超买超卖、KDJ 钝化与背离
+- **量价分析**：量比异动、缩量回调、放量突破
+- **形态识别**：锤子线、吞没形态、十字星等 K 线形态
+- **支撑压力**：自动计算多级支撑位和压力位
+
+</details>
+
+<details>
+<summary><b>多市场 & 多账户</b></summary>
+
+- **覆盖市场**：A 股、港股、美股实时行情
+- **账户管理**：支持多券商账户独立管理，汇总展示总资产
+- **交易风格**：按短线/波段/长线分别设置，AI 建议更精准
+
+</details>
+
+<details>
+<summary><b>全渠道通知</b></summary>
+
+Telegram / 企业微信 / 钉钉 / 飞书 / Bark / 自定义 Webhook
+
+</details>
 
 ## 快速开始
 
-### Docker 部署（推荐）
-
 ```bash
-# 拉取镜像
-docker pull sunxiao0721/panwatch:latest
-
-# 运行容器
 docker run -d \
   --name panwatch \
   -p 8000:8000 \
   -v panwatch_data:/app/data \
   sunxiao0721/panwatch:latest
-
-# 访问 http://localhost:8000
 ```
 
-### Docker Compose
+访问 `http://localhost:8000`，首次使用设置账号密码即可。
 
-创建 `docker-compose.yml`:
+<details>
+<summary>Docker Compose</summary>
 
 ```yaml
 version: '3.8'
@@ -57,128 +90,69 @@ services:
       - "8000:8000"
     volumes:
       - panwatch_data:/app/data
-    # environment:
-    #   - AUTH_USERNAME=admin       # 可选，预设登录用户名
-    #   - AUTH_PASSWORD=password    # 可选，预设登录密码
     restart: unless-stopped
 
 volumes:
   panwatch_data:
 ```
 
-启动：
-
 ```bash
 docker-compose up -d
 ```
 
-## 本地开发
+</details>
 
-### 环境要求
-
-- Python 3.10+
-- Node.js 18+
-- pnpm
-
-### 后端
-
-```bash
-# 创建虚拟环境
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# 安装依赖
-pip install -r requirements.txt
-
-# 启动开发服务器
-python server.py
-```
-
-### 前端
-
-```bash
-cd frontend
-
-# 安装依赖
-pnpm install
-
-# 启动开发服务器
-pnpm dev
-```
-
-前端开发服务器默认运行在 `http://localhost:5173`，会自动代理 API 请求到后端 `http://localhost:8000`。
-
-## 构建镜像
-
-```bash
-# 赋予执行权限
-chmod +x build.sh
-
-# 构建默认版本 (latest)
-./build.sh
-
-# 构建指定版本
-./build.sh 1.0.0
-
-# 构建并推送
-./build.sh 1.0.0
-docker push sunxiao0721/panwatch:1.0.0
-docker push sunxiao0721/panwatch:latest
-```
-
-## 配置说明
-
-### 环境变量
+<details>
+<summary>环境变量</summary>
 
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
-| `AUTH_USERNAME` | 预设登录用户名（可选） | 首次访问时设置 |
-| `AUTH_PASSWORD` | 预设登录密码（可选） | 首次访问时设置 |
-| `JWT_SECRET` | JWT 签名密钥（可选） | 自动生成随机密钥 |
-| `DATA_DIR` | 数据目录 | `./data` |
+| `AUTH_USERNAME` | 预设登录用户名 | 首次访问时设置 |
+| `AUTH_PASSWORD` | 预设登录密码 | 首次访问时设置 |
+| `JWT_SECRET` | JWT 签名密钥 | 自动生成 |
+| `DATA_DIR` | 数据存储目录 | `./data` |
 
-**Docker 预设账号示例：**
+</details>
+
+<details>
+<summary>首次配置</summary>
+
+1. 访问 Web 界面，设置登录账号
+2. **设置 → AI 服务商**：配置 OpenAI 兼容 API（支持 OpenAI / 智谱 / DeepSeek / Ollama 等）
+3. **设置 → 通知渠道**：添加 Telegram 或其他推送渠道
+4. **持仓 → 添加股票**：添加自选股，启用对应 Agent
+
+</details>
+
+<details>
+<summary>本地开发</summary>
+
+**环境要求**：Python 3.10+ / Node.js 18+ / pnpm
 
 ```bash
-docker run -d \
-  --name panwatch \
-  -p 8000:8000 \
-  -v panwatch_data:/app/data \
-  -e AUTH_USERNAME=admin \
-  -e AUTH_PASSWORD=your-password \
-  sunxiao0721/panwatch:latest
+# 后端
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+python server.py
+
+# 前端（新终端）
+cd frontend && pnpm install && pnpm dev
 ```
 
-### 首次使用
+前端运行在 `http://localhost:5173`，自动代理 API 到后端。
 
-1. 访问 `http://localhost:8000`
-2. 设置用户名和密码（如未通过环境变量预设）
-3. 在设置页面配置 AI 服务商（支持 OpenAI 兼容 API）
-4. 添加通知渠道（可选）
-5. 添加自选股或使用示例股票
+</details>
 
 ## 技术栈
 
-**后端**
+**后端**：FastAPI / SQLAlchemy / APScheduler / OpenAI SDK
 
-- FastAPI
-- SQLAlchemy
-- APScheduler
-- OpenAI SDK
-
-**前端**
-
-- React 18
-- TypeScript
-- Tailwind CSS
-- shadcn/ui
+**前端**：React 18 / TypeScript / Tailwind CSS / shadcn/ui
 
 ## 贡献
 
-欢迎提交 Issue 和 PR！
-
-如果你想编写自定义 Agent 或数据源，请参考 [贡献指南](CONTRIBUTING.md)。
+欢迎提交 Issue 和 PR！自定义 Agent 和数据源开发请参考 [贡献指南](CONTRIBUTING.md)。
 
 ## License
 
-MIT
+[MIT](LICENSE)

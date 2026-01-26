@@ -171,13 +171,70 @@ class IntradayMonitorAgent(BaseAgent):
         kline = data.get("kline_summary")
         if kline and not kline.get("error"):
             lines.append("\n## 技术分析")
+
+            # 基础趋势
             lines.append(f"- 趋势：{kline.get('trend', 'N/A')}")
-            lines.append(f"- MACD：{kline.get('macd_status', 'N/A')}")
             lines.append(f"- 近5日：{kline.get('recent_5_up', 0)}涨{5-kline.get('recent_5_up', 0)}跌")
-            lines.append(f"- 5日涨幅：{format_num(kline.get('change_5d'))}%")
-            lines.append(f"- 20日涨幅：{format_num(kline.get('change_20d'))}%")
-            lines.append(f"- MA5：{format_num(kline.get('ma5'))} | MA10：{format_num(kline.get('ma10'))} | MA20：{format_num(kline.get('ma20'))}")
-            lines.append(f"- 支撑位：{format_num(kline.get('support'))} | 压力位：{format_num(kline.get('resistance'))}")
+            lines.append(f"- 5日涨幅：{format_num(kline.get('change_5d'))}% | 20日涨幅：{format_num(kline.get('change_20d'))}%")
+
+            # MACD
+            macd_info = f"MACD：{kline.get('macd_status', 'N/A')}"
+            if kline.get('macd_cross_days'):
+                macd_info += f"（{kline.get('macd_cross_days')}日前）"
+            lines.append(f"- {macd_info}")
+
+            # RSI
+            rsi_status = kline.get('rsi_status')
+            rsi6 = kline.get('rsi6')
+            if rsi_status and rsi6 is not None:
+                lines.append(f"- RSI(6)：{rsi6:.1f}（{rsi_status}）")
+
+            # KDJ
+            kdj_status = kline.get('kdj_status')
+            kdj_k, kdj_d, kdj_j = kline.get('kdj_k'), kline.get('kdj_d'), kline.get('kdj_j')
+            if kdj_status and kdj_k is not None:
+                lines.append(f"- KDJ：K={kdj_k:.1f} D={kdj_d:.1f} J={kdj_j:.1f}（{kdj_status}）")
+
+            # 布林带
+            boll_status = kline.get('boll_status')
+            boll_upper, boll_lower = kline.get('boll_upper'), kline.get('boll_lower')
+            if boll_status and boll_upper is not None:
+                lines.append(f"- 布林带：上轨={format_num(boll_upper)} 下轨={format_num(boll_lower)}（{boll_status}）")
+
+            # 量能
+            volume_trend = kline.get('volume_trend')
+            volume_ratio = kline.get('volume_ratio')
+            if volume_trend:
+                vol_info = f"量能：{volume_trend}"
+                if volume_ratio:
+                    vol_info += f"（量比={volume_ratio:.2f}）"
+                lines.append(f"- {vol_info}")
+
+            # 均线
+            lines.append(f"- MA5：{format_num(kline.get('ma5'))} | MA10：{format_num(kline.get('ma10'))} | MA20：{format_num(kline.get('ma20'))} | MA60：{format_num(kline.get('ma60'))}")
+
+            # 多级支撑压力
+            support_m, resistance_m = kline.get('support_m'), kline.get('resistance_m')
+            if support_m and resistance_m:
+                lines.append(f"- 中期支撑：{format_num(support_m)} | 中期压力：{format_num(resistance_m)}")
+
+            support_s, resistance_s = kline.get('support_s'), kline.get('resistance_s')
+            if support_s and resistance_s:
+                lines.append(f"- 短期支撑：{format_num(support_s)} | 短期压力：{format_num(resistance_s)}")
+
+            # K线形态
+            kline_pattern = kline.get('kline_pattern')
+            if kline_pattern:
+                lines.append(f"- K线形态：{kline_pattern}")
+
+            # 振幅
+            amplitude = kline.get('amplitude')
+            amplitude_avg5 = kline.get('amplitude_avg5')
+            if amplitude is not None:
+                amp_info = f"今日振幅：{amplitude:.2f}%"
+                if amplitude_avg5 is not None:
+                    amp_info += f"（5日平均：{amplitude_avg5:.2f}%）"
+                lines.append(f"- {amp_info}")
 
         # 账户资金情况
         lines.append(f"\n## 账户资金")

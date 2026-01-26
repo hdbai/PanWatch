@@ -13,14 +13,42 @@ export interface SuggestionInfo {
 export interface KlineSummary {
   trend: string
   macd_status: string
+  macd_cross?: string
+  macd_cross_days?: number
   recent_5_up: number
   change_5d: number | null
   change_20d: number | null
   ma5: number | null
   ma10: number | null
   ma20: number | null
+  ma60?: number | null
+  // RSI
+  rsi6?: number | null
+  rsi_status?: string
+  // KDJ
+  kdj_k?: number | null
+  kdj_d?: number | null
+  kdj_j?: number | null
+  kdj_status?: string
+  // 布林带
+  boll_upper?: number | null
+  boll_mid?: number | null
+  boll_lower?: number | null
+  boll_status?: string
+  // 量能
+  volume_ratio?: number | null
+  volume_trend?: string
+  // 振幅
+  amplitude?: number | null
+  // 多级支撑压力
   support: number | null
   resistance: number | null
+  support_s?: number | null
+  support_m?: number | null
+  resistance_s?: number | null
+  resistance_m?: number | null
+  // K线形态
+  kline_pattern?: string
 }
 
 interface SuggestionBadgeProps {
@@ -32,12 +60,17 @@ interface SuggestionBadgeProps {
 }
 
 const actionColors: Record<string, string> = {
+  // 盘中监测
   buy: 'bg-rose-500 text-white',
   add: 'bg-rose-400 text-white',
   reduce: 'bg-emerald-500 text-white',
   sell: 'bg-emerald-600 text-white',
   hold: 'bg-amber-500 text-white',
   watch: 'bg-slate-500 text-white',
+  // 盘前分析
+  alert: 'bg-blue-500 text-white',  // 设置预警
+  // 盘后日报
+  avoid: 'bg-red-600 text-white',  // 暂时回避
 }
 
 export function SuggestionBadge({
@@ -126,15 +159,62 @@ export function SuggestionBadge({
 
             {/* 技术指标 */}
             {kline && (
-              <div>
-                <div className="text-[11px] text-muted-foreground mb-2">技术指标</div>
+              <div className="space-y-3">
+                <div className="text-[11px] text-muted-foreground">技术指标</div>
+
+                {/* 趋势与形态 */}
                 <div className="flex flex-wrap gap-2 text-[11px]">
                   <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
                     {kline.trend}
                   </span>
                   <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
-                    {kline.macd_status}
+                    MACD {kline.macd_status}
                   </span>
+                  {kline.rsi_status && (
+                    <span className={`px-2 py-0.5 rounded ${
+                      kline.rsi_status === '超买' ? 'bg-rose-500/10 text-rose-600' :
+                      kline.rsi_status === '超卖' ? 'bg-emerald-500/10 text-emerald-600' :
+                      'bg-accent/50 text-muted-foreground'
+                    }`}>
+                      RSI {kline.rsi_status}{kline.rsi6 != null && ` (${kline.rsi6.toFixed(0)})`}
+                    </span>
+                  )}
+                  {kline.kdj_status && (
+                    <span className="px-2 py-0.5 rounded bg-accent/50 text-muted-foreground">
+                      KDJ {kline.kdj_status}
+                    </span>
+                  )}
+                  {kline.volume_trend && (
+                    <span className={`px-2 py-0.5 rounded ${
+                      kline.volume_trend === '放量' ? 'bg-amber-500/10 text-amber-600' :
+                      kline.volume_trend === '缩量' ? 'bg-blue-500/10 text-blue-600' :
+                      'bg-accent/50 text-muted-foreground'
+                    }`}>
+                      {kline.volume_trend}{kline.volume_ratio != null && ` (${kline.volume_ratio.toFixed(1)}x)`}
+                    </span>
+                  )}
+                  {kline.boll_status && (
+                    <span className={`px-2 py-0.5 rounded ${
+                      kline.boll_status === '突破上轨' ? 'bg-rose-500/10 text-rose-600' :
+                      kline.boll_status === '跌破下轨' ? 'bg-emerald-500/10 text-emerald-600' :
+                      'bg-accent/50 text-muted-foreground'
+                    }`}>
+                      布林 {kline.boll_status}
+                    </span>
+                  )}
+                  {kline.kline_pattern && (
+                    <span className={`px-2 py-0.5 rounded ${
+                      kline.kline_pattern.includes('阳') || kline.kline_pattern.includes('涨') ? 'bg-rose-500/10 text-rose-600' :
+                      kline.kline_pattern.includes('阴') || kline.kline_pattern.includes('跌') ? 'bg-emerald-500/10 text-emerald-600' :
+                      'bg-amber-500/10 text-amber-600'
+                    }`}>
+                      {kline.kline_pattern}
+                    </span>
+                  )}
+                </div>
+
+                {/* 支撑压力 */}
+                <div className="flex flex-wrap gap-2 text-[11px]">
                   {kline.support && (
                     <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600">
                       支撑 {kline.support.toFixed(2)}
@@ -146,8 +226,10 @@ export function SuggestionBadge({
                     </span>
                   )}
                 </div>
+
+                {/* 涨跌幅 */}
                 {(kline.change_5d !== null || kline.change_20d !== null) && (
-                  <div className="flex gap-4 mt-2 text-[11px] text-muted-foreground">
+                  <div className="flex gap-4 text-[11px] text-muted-foreground">
                     {kline.change_5d !== null && (
                       <span>5日: <span className={kline.change_5d >= 0 ? 'text-rose-500' : 'text-emerald-500'}>
                         {kline.change_5d >= 0 ? '+' : ''}{kline.change_5d.toFixed(2)}%
@@ -157,6 +239,9 @@ export function SuggestionBadge({
                       <span>20日: <span className={kline.change_20d >= 0 ? 'text-rose-500' : 'text-emerald-500'}>
                         {kline.change_20d >= 0 ? '+' : ''}{kline.change_20d.toFixed(2)}%
                       </span></span>
+                    )}
+                    {kline.amplitude != null && (
+                      <span>振幅: {kline.amplitude.toFixed(2)}%</span>
                     )}
                   </div>
                 )}

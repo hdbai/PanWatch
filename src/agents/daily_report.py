@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +11,16 @@ from src.core.analysis_history import save_analysis
 from src.models.market import MarketCode, StockData, IndexData
 
 logger = logging.getLogger(__name__)
+
+# 盘后建议类型映射
+DAILY_ACTION_MAP = {
+    "继续持有": {"action": "hold", "label": "继续持有"},
+    "考虑加仓": {"action": "add", "label": "考虑加仓"},
+    "考虑减仓": {"action": "reduce", "label": "考虑减仓"},
+    "考虑止损": {"action": "sell", "label": "考虑止损"},
+    "明日关注": {"action": "watch", "label": "明日关注"},
+    "暂时回避": {"action": "avoid", "label": "暂时回避"},
+}
 
 PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "daily_report.txt"
 
@@ -174,9 +185,48 @@ class DailyReportAgent(BaseAgent):
         user_content = "\n".join(lines)
         return system_prompt, user_content
 
+    def _parse_suggestions(self, content: str, watchlist: list) -> dict[str, dict]:
+        """
+        从 AI 响应中解析个股建议
+        返回: {symbol: {action, action_label, reason, should_alert}}
+        """
+        suggestions = {}
+        symbol_set = {s.symbol for s in watchlist}
+
+        # 匹配格式: 「股票代码」建议类型：理由
+        # 也支持 【】 和其他变体
+        patterns = [
+            r'[「【](\d{5,6})[」】]\s*(继续持有|考虑加仓|考虑减仓|考虑止损|明日关注|暂时回避)[：:]\s*(.+?)(?=\n[「【]|\n\n|\Z)',
+            r'[「【]([A-Z]+)[」】]\s*(继续持有|考虑加仓|考虑减仓|考虑止损|明日关注|暂时回避)[：:]\s*(.+?)(?=\n[「【]|\n\n|\Z)',
+        ]
+
+        for pattern in patterns:
+            for match in re.finditer(pattern, content, re.DOTALL):
+                symbol = match.group(1)
+                action_text = match.group(2)
+                reason = match.group(3).strip()
+
+                # 验证是否在自选股列表中
+                if symbol not in symbol_set:
+                    continue
+
+                action_info = DAILY_ACTION_MAP.get(action_text, {"action": "hold", "label": "继续持有"})
+                suggestions[symbol] = {
+                    "action": action_info["action"],
+                    "action_label": action_info["label"],
+                    "reason": reason[:100],  # 限制长度
+                    "should_alert": action_info["action"] in ["add", "reduce", "sell"],
+                }
+
+        return suggestions
+
     async def analyze(self, context: AgentContext, data: dict) -> AnalysisResult:
         """调用 AI 分析并保存到历史"""
         result = await super().analyze(context, data)
+
+        # 解析个股建议
+        suggestions = self._parse_suggestions(result.content, context.watchlist)
+        result.raw_data["suggestions"] = suggestions
 
         # 保存到历史记录（使用 "*" 表示全局分析）
         # 简化 raw_data，只保存关键信息
@@ -186,8 +236,12 @@ class DailyReportAgent(BaseAgent):
             stock_symbol="*",
             content=result.content,
             title=result.title,
-            raw_data={"symbols": symbols, "timestamp": data.get("timestamp")},
+            raw_data={
+                "symbols": symbols,
+                "timestamp": data.get("timestamp"),
+                "suggestions": suggestions,
+            },
         )
-        logger.info(f"盘后日报已保存到历史记录")
+        logger.info(f"盘后日报已保存到历史记录，包含 {len(suggestions)} 条建议")
 
         return result
