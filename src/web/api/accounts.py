@@ -336,7 +336,11 @@ def delete_position(position_id: int, db: Session = Depends(get_db)):
 # ========== Portfolio Summary ==========
 
 @router.get("/portfolio/summary")
-def get_portfolio_summary(account_id: int | None = None, db: Session = Depends(get_db)):
+def get_portfolio_summary(
+    account_id: int | None = None,
+    include_quotes: bool = True,
+    db: Session = Depends(get_db),
+):
     """
     获取持仓汇总信息
 
@@ -375,8 +379,8 @@ def get_portfolio_summary(account_id: int | None = None, db: Session = Depends(g
     stocks = db.query(Stock).filter(Stock.id.in_(all_stock_ids)).all() if all_stock_ids else []
     stock_map = {s.id: s for s in stocks}
 
-    # 获取实时行情
-    quotes = _fetch_quotes_for_stocks(stocks)
+    # 获取实时行情（可选）
+    quotes = _fetch_quotes_for_stocks(stocks) if include_quotes else {}
 
     # 获取汇率
     hkd_rate = get_hkd_cny_rate()
@@ -416,16 +420,17 @@ def get_portfolio_summary(account_id: int | None = None, db: Session = Depends(g
             pnl = None
             pnl_pct = None
 
+            cost = pos.cost_price * pos.quantity
+            cost_cny = cost * rate  # 假设成本价也是原币种
+            acc_cost += cost_cny
+
             if current_price is not None:
                 market_value = current_price * pos.quantity  # 原币种市值
                 market_value_cny = market_value * rate  # 人民币市值
-                cost = pos.cost_price * pos.quantity
-                cost_cny = cost * rate  # 假设成本价也是原币种
                 pnl = market_value_cny - cost_cny
                 pnl_pct = (pnl / cost_cny * 100) if cost_cny > 0 else 0
 
                 acc_market_value += market_value_cny
-                acc_cost += cost_cny
 
             positions_data.append({
                 "id": pos.id,
@@ -447,9 +452,14 @@ def get_portfolio_summary(account_id: int | None = None, db: Session = Depends(g
                 "exchange_rate": rate if is_foreign else None,
             })
 
-        acc_pnl = acc_market_value - acc_cost
-        acc_pnl_pct = (acc_pnl / acc_cost * 100) if acc_cost > 0 else 0
-        acc_total_assets = acc_market_value + acc.available_funds
+        if include_quotes:
+            acc_pnl = acc_market_value - acc_cost
+            acc_pnl_pct = (acc_pnl / acc_cost * 100) if acc_cost > 0 else 0
+            acc_total_assets = acc_market_value + acc.available_funds
+        else:
+            acc_pnl = 0
+            acc_pnl_pct = 0
+            acc_total_assets = acc.available_funds
 
         account_summaries.append({
             "id": acc.id,
@@ -467,17 +477,23 @@ def get_portfolio_summary(account_id: int | None = None, db: Session = Depends(g
         grand_total_cost += acc_cost
         grand_available_funds += acc.available_funds
 
-    grand_pnl = grand_total_market_value - grand_total_cost
-    grand_pnl_pct = (grand_pnl / grand_total_cost * 100) if grand_total_cost > 0 else 0
-    grand_total_assets = grand_total_market_value + grand_available_funds
+    if include_quotes:
+        grand_pnl = grand_total_market_value - grand_total_cost
+        grand_pnl_pct = (grand_pnl / grand_total_cost * 100) if grand_total_cost > 0 else 0
+        grand_total_assets = grand_total_market_value + grand_available_funds
+    else:
+        grand_pnl = 0
+        grand_pnl_pct = 0
+        grand_total_assets = grand_available_funds
 
     # 构建 quotes 字典（用于前端股票列表显示）
     quotes_dict = {}
-    for symbol, quote in quotes.items():
-        quotes_dict[symbol] = {
-            "current_price": quote.get("current_price"),
-            "change_pct": quote.get("change_pct"),
-        }
+    if include_quotes:
+        for symbol, quote in quotes.items():
+            quotes_dict[symbol] = {
+                "current_price": quote.get("current_price"),
+                "change_pct": quote.get("change_pct"),
+            }
 
     return {
         "accounts": account_summaries,
@@ -493,7 +509,7 @@ def get_portfolio_summary(account_id: int | None = None, db: Session = Depends(g
             "HKD_CNY": hkd_rate,
             "USD_CNY": usd_rate,
         },
-        "quotes": quotes_dict,  # 新增：直接返回行情数据
+        "quotes": quotes_dict,  # 可选：返回行情数据
     }
 
 

@@ -23,6 +23,7 @@ import { Switch } from '@/components/ui/switch'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { Onboarding } from '@/components/onboarding'
 import { SuggestionBadge, type SuggestionInfo, type KlineSummary } from '@/components/suggestion-badge'
+import { KlineSummaryDialog } from '@/components/kline-summary-dialog'
 
 interface MarketIndex {
   symbol: string
@@ -54,14 +55,36 @@ interface PortfolioSummary {
     available_funds: number
     total_assets: number
   }
+  exchange_rates?: {
+    HKD_CNY: number
+    USD_CNY?: number
+  }
 }
 
 interface AccountSummary {
   id: number
   name: string
+  available_funds: number
+  total_cost: number
   total_market_value: number
   total_pnl: number
   total_pnl_pct: number
+  total_assets: number
+  positions: Position[]
+}
+
+interface Position {
+  id: number
+  stock_id: number
+  symbol: string
+  name: string
+  market: string
+  cost_price: number
+  quantity: number
+  invested_amount: number | null
+  trading_style: string
+  current_price: number | null
+  change_pct: number | null
 }
 
 interface MonitorStock {
@@ -92,9 +115,16 @@ interface Stock {
   enabled: boolean
 }
 
-interface StockQuote {
-  current_price: number
-  change_pct: number
+interface QuoteRequestItem {
+  symbol: string
+  market: string
+}
+
+interface QuoteResponse {
+  symbol: string
+  market: string
+  current_price: number | null
+  change_pct: number | null
 }
 
 interface AnalysisRecord {
@@ -105,6 +135,73 @@ interface AnalysisRecord {
   title: string
   content: string
   created_at: string
+}
+
+const round2 = (value: number) => Math.round(value * 100) / 100
+
+const mergePortfolioQuotes = (
+  portfolio: PortfolioSummary | null,
+  quotes: Record<string, { current_price: number | null; change_pct: number | null }>
+): PortfolioSummary | null => {
+  if (!portfolio) return null
+
+  const hkdRate = portfolio.exchange_rates?.HKD_CNY ?? 0.92
+  const usdRate = portfolio.exchange_rates?.USD_CNY ?? 7.25
+
+  let grandMarketValue = 0
+  let grandCost = 0
+  let grandAvailable = 0
+
+  const accounts = portfolio.accounts.map(account => {
+    let accMarketValue = 0
+    let accCost = 0
+
+    for (const pos of account.positions) {
+      const quote = quotes[pos.symbol]
+      const current_price = quote?.current_price ?? pos.current_price ?? null
+      const rate = pos.market === 'HK' ? hkdRate : pos.market === 'US' ? usdRate : 1
+      const cost = pos.cost_price * pos.quantity * rate
+      accCost += cost
+
+      if (current_price != null) {
+        accMarketValue += current_price * pos.quantity * rate
+      }
+    }
+
+    const accPnl = accMarketValue - accCost
+    const accPnlPct = accCost > 0 ? (accPnl / accCost * 100) : 0
+    const accTotalAssets = accMarketValue + account.available_funds
+
+    grandMarketValue += accMarketValue
+    grandCost += accCost
+    grandAvailable += account.available_funds
+
+    return {
+      ...account,
+      total_market_value: round2(accMarketValue),
+      total_cost: round2(accCost),
+      total_pnl: round2(accPnl),
+      total_pnl_pct: round2(accPnlPct),
+      total_assets: round2(accTotalAssets),
+    }
+  })
+
+  const grandPnl = grandMarketValue - grandCost
+  const grandPnlPct = grandCost > 0 ? (grandPnl / grandCost * 100) : 0
+  const grandTotalAssets = grandMarketValue + grandAvailable
+
+  return {
+    ...portfolio,
+    accounts,
+    total: {
+      total_market_value: round2(grandMarketValue),
+      total_cost: round2(grandCost),
+      total_pnl: round2(grandPnl),
+      total_pnl_pct: round2(grandPnlPct),
+      available_funds: round2(grandAvailable),
+      total_assets: round2(grandTotalAssets),
+    },
+  }
 }
 
 export default function DashboardPage() {
@@ -119,13 +216,22 @@ export default function DashboardPage() {
 
   // Portfolio
   const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null)
+  const [portfolioRaw, setPortfolioRaw] = useState<PortfolioSummary | null>(null)
   const [portfolioLoading, setPortfolioLoading] = useState(false)
   const hasPortfolio = portfolio && portfolio.accounts.length > 0
 
   // Watchlist
   const [stocks, setStocks] = useState<Stock[]>([])
-  const [quotes, setQuotes] = useState<Record<string, StockQuote>>({})
+  const [quotes, setQuotes] = useState<Record<string, { current_price: number | null; change_pct: number | null }>>({})
+  const [quotesLoading, setQuotesLoading] = useState(false)
   const hasWatchlist = stocks.filter(s => s.enabled).length > 0
+
+  // Kline Dialog
+  const [klineDialogOpen, setKlineDialogOpen] = useState(false)
+  const [klineDialogSymbol, setKlineDialogSymbol] = useState('')
+  const [klineDialogMarket, setKlineDialogMarket] = useState('CN')
+  const [klineDialogName, setKlineDialogName] = useState<string | undefined>(undefined)
+  const [klineDialogHasPosition, setKlineDialogHasPosition] = useState(false)
 
   // Monitor stocks
   const [monitorStocks, setMonitorStocks] = useState<MonitorStock[]>([])
@@ -172,27 +278,6 @@ export default function DashboardPage() {
     }
   }, [hasWatchlist])
 
-  // Auto-refresh timer
-  useEffect(() => {
-    if (autoRefresh) {
-      scanAlerts()
-      refreshTimerRef.current = setInterval(() => {
-        handleRefresh()
-      }, refreshInterval * 1000)
-    } else {
-      if (refreshTimerRef.current) {
-        clearInterval(refreshTimerRef.current)
-        refreshTimerRef.current = undefined
-      }
-    }
-
-    return () => {
-      if (refreshTimerRef.current) {
-        clearInterval(refreshTimerRef.current)
-      }
-    }
-  }, [autoRefresh, refreshInterval])
-
   const loadIndices = async () => {
     setIndicesLoading(true)
     try {
@@ -217,8 +302,9 @@ export default function DashboardPage() {
   const loadPortfolio = async () => {
     setPortfolioLoading(true)
     try {
-      const data = await fetchAPI<PortfolioSummary>('/portfolio/summary')
-      setPortfolio(data)
+      const data = await fetchAPI<PortfolioSummary>('/portfolio/summary?include_quotes=false')
+      setPortfolioRaw(data)
+      setPortfolio(mergePortfolioQuotes(data, quotes))
     } catch (e) {
       console.error('获取持仓失败:', e)
     } finally {
@@ -228,16 +314,101 @@ export default function DashboardPage() {
 
   const loadWatchlist = async () => {
     try {
-      const [stocksData, quotesData] = await Promise.all([
-        fetchAPI<Stock[]>('/stocks'),
-        fetchAPI<Record<string, StockQuote>>('/stocks/quotes'),
-      ])
+      const stocksData = await fetchAPI<Stock[]>('/stocks')
       setStocks(stocksData)
-      setQuotes(quotesData)
     } catch (e) {
       console.error('获取自选股失败:', e)
     }
   }
+
+  const buildQuoteItems = useCallback((): QuoteRequestItem[] => {
+    const items: QuoteRequestItem[] = []
+    const seen = new Set<string>()
+
+    for (const stock of stocks) {
+      if (!stock.enabled) continue
+      const key = `${stock.market}:${stock.symbol}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      items.push({ symbol: stock.symbol, market: stock.market })
+    }
+
+    for (const account of portfolioRaw?.accounts || []) {
+      for (const pos of account.positions) {
+        const key = `${pos.market}:${pos.symbol}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        items.push({ symbol: pos.symbol, market: pos.market })
+      }
+    }
+
+    return items
+  }, [stocks, portfolioRaw])
+
+  const refreshQuotes = useCallback(async () => {
+    const items = buildQuoteItems()
+    if (items.length === 0) return
+
+    setQuotesLoading(true)
+    try {
+      const data = await fetchAPI<QuoteResponse[]>('/quotes/batch', {
+        method: 'POST',
+        body: JSON.stringify({ items }),
+      })
+      const map: Record<string, { current_price: number | null; change_pct: number | null }> = {}
+      for (const item of data) {
+        map[item.symbol] = {
+          current_price: item.current_price ?? null,
+          change_pct: item.change_pct ?? null,
+        }
+      }
+      setQuotes(map)
+      setLastRefreshTime(new Date())
+    } catch (e) {
+      console.warn('刷新行情失败:', e)
+    } finally {
+      setQuotesLoading(false)
+    }
+  }, [buildQuoteItems])
+
+  const openKlineDialog = useCallback((symbol: string, market: string, name?: string, hasPosition?: boolean) => {
+    setKlineDialogSymbol(symbol)
+    setKlineDialogMarket(market || 'CN')
+    setKlineDialogName(name)
+    setKlineDialogHasPosition(!!hasPosition)
+    setKlineDialogOpen(true)
+  }, [])
+
+  useEffect(() => {
+    if (!portfolioRaw) return
+    setPortfolio(mergePortfolioQuotes(portfolioRaw, quotes))
+  }, [portfolioRaw, quotes])
+
+  useEffect(() => {
+    if (stocks.length === 0 && (!portfolioRaw || portfolioRaw.accounts.length === 0)) return
+    refreshQuotes()
+  }, [stocks, portfolioRaw, refreshQuotes])
+
+  // Auto-refresh timer
+  useEffect(() => {
+    if (autoRefresh) {
+      refreshQuotes()
+      refreshTimerRef.current = setInterval(() => {
+        refreshQuotes()
+      }, refreshInterval * 1000)
+    } else {
+      if (refreshTimerRef.current) {
+        clearInterval(refreshTimerRef.current)
+        refreshTimerRef.current = undefined
+      }
+    }
+
+    return () => {
+      if (refreshTimerRef.current) {
+        clearInterval(refreshTimerRef.current)
+      }
+    }
+  }, [autoRefresh, refreshInterval, refreshQuotes])
 
   const loadAIInsights = async () => {
     setInsightsLoading(true)
@@ -273,15 +444,8 @@ export default function DashboardPage() {
   }, [hasWatchlist, enableAIAnalysis])
 
   const handleRefresh = useCallback(async () => {
-    await Promise.all([
-      loadIndices(),
-      loadPortfolio(),
-      loadWatchlist(),
-      loadAIInsights(),
-      scanAlerts(),
-    ])
-    setLastRefreshTime(new Date())
-  }, [scanAlerts])
+    await refreshQuotes()
+  }, [refreshQuotes])
 
   const formatMoney = (value: number) => {
     if (Math.abs(value) >= 10000) {
@@ -318,6 +482,15 @@ export default function DashboardPage() {
         open={showOnboarding}
         onComplete={handleOnboardingComplete}
         hasStocks={hasWatchlist}
+      />
+
+      <KlineSummaryDialog
+        open={klineDialogOpen}
+        onOpenChange={setKlineDialogOpen}
+        symbol={klineDialogSymbol}
+        market={klineDialogMarket}
+        stockName={klineDialogName}
+        hasPosition={klineDialogHasPosition}
       />
 
       {/* Header */}
@@ -388,8 +561,8 @@ export default function DashboardPage() {
               </span>
             )}
           </div>
-          <Button variant="secondary" size="sm" onClick={handleRefresh} disabled={portfolioLoading || scanning || indicesLoading} className="h-8 md:h-9 px-2.5 md:px-3">
-            <RefreshCw className={`w-4 h-4 ${portfolioLoading || scanning || indicesLoading ? 'animate-spin' : ''}`} />
+          <Button variant="secondary" size="sm" onClick={handleRefresh} disabled={quotesLoading || portfolioLoading} className="h-8 md:h-9 px-2.5 md:px-3">
+            <RefreshCw className={`w-4 h-4 ${quotesLoading || portfolioLoading ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">刷新</span>
           </Button>
         </div>
@@ -554,6 +727,13 @@ export default function DashboardPage() {
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-[13px] font-semibold text-foreground">{stock.symbol}</span>
                       <span className="text-[12px] text-muted-foreground">{stock.name}</span>
+                      <button
+                        onClick={() => openKlineDialog(stock.symbol, stock.market, stock.name, stock.has_position)}
+                        className="p-1 rounded hover:bg-accent/50 transition-colors"
+                        title="K线指标"
+                      >
+                        <BarChart3 className="w-4 h-4 text-muted-foreground" />
+                      </button>
                       {stock.alert_type && (
                         <span className={`text-[10px] px-1.5 py-0.5 rounded ${
                           stock.alert_type === '急涨' ? 'bg-rose-500/10 text-rose-500' : 'bg-emerald-500/10 text-emerald-500'

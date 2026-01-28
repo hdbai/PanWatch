@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Plus, Trash2, Pencil, Search, X, TrendingUp, Bot, Play, RefreshCw, Wallet, PiggyBank, ArrowUpRight, ArrowDownRight, Building2, ChevronDown, ChevronRight, Cpu, Bell, Clock, Newspaper, ExternalLink } from 'lucide-react'
+import { Plus, Trash2, Pencil, Search, X, TrendingUp, Bot, Play, RefreshCw, Wallet, PiggyBank, ArrowUpRight, ArrowDownRight, Building2, ChevronDown, ChevronRight, Cpu, Bell, Clock, Newspaper, ExternalLink, BarChart3 } from 'lucide-react'
 import { fetchAPI, useLocalStorage, type AIService, type NotifyChannel } from '@/lib/utils'
 import { SuggestionBadge, type SuggestionInfo, type KlineSummary } from '@/components/suggestion-badge'
+import { KlineSummaryDialog } from '@/components/kline-summary-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -86,8 +87,9 @@ interface PortfolioSummary {
   }
   exchange_rates?: {
     HKD_CNY: number
+    USD_CNY?: number
   }
-  quotes?: Record<string, { current_price: number; change_pct: number }>
+  quotes?: Record<string, { current_price: number | null; change_pct: number | null }>
 }
 
 interface AgentConfig {
@@ -103,6 +105,18 @@ interface SearchResult {
   symbol: string
   name: string
   market: string
+}
+
+interface QuoteRequestItem {
+  symbol: string
+  market: string
+}
+
+interface QuoteResponse {
+  symbol: string
+  market: string
+  current_price: number | null
+  change_pct: number | null
 }
 
 interface StockForm {
@@ -179,6 +193,97 @@ interface NewsItem {
 const emptyStockForm: StockForm = { symbol: '', name: '', market: 'CN' }
 const emptyAccountForm: AccountForm = { name: '', available_funds: '0' }
 
+const round2 = (value: number) => Math.round(value * 100) / 100
+
+const mergePortfolioQuotes = (
+  portfolio: PortfolioSummary | null,
+  quotes: Record<string, { current_price: number | null; change_pct: number | null }>
+): PortfolioSummary | null => {
+  if (!portfolio) return null
+
+  const hkdRate = portfolio.exchange_rates?.HKD_CNY ?? 0.92
+  const usdRate = portfolio.exchange_rates?.USD_CNY ?? 7.25
+
+  let grandMarketValue = 0
+  let grandCost = 0
+  let grandAvailable = 0
+
+  const accounts = portfolio.accounts.map(account => {
+    let accMarketValue = 0
+    let accCost = 0
+
+    const positions = account.positions.map(pos => {
+      const quote = quotes[pos.symbol]
+      const current_price = quote?.current_price ?? pos.current_price ?? null
+      const change_pct = quote?.change_pct ?? pos.change_pct ?? null
+      const rate = pos.market === 'HK' ? hkdRate : pos.market === 'US' ? usdRate : 1
+
+      const cost = pos.cost_price * pos.quantity * rate
+      accCost += cost
+
+      let market_value: number | null = null
+      let market_value_cny: number | null = null
+      let pnl: number | null = null
+      let pnl_pct: number | null = null
+
+      if (current_price != null) {
+        market_value = current_price * pos.quantity
+        market_value_cny = market_value * rate
+        accMarketValue += market_value_cny
+        pnl = market_value_cny - cost
+        pnl_pct = cost > 0 ? (pnl / cost * 100) : 0
+      }
+
+      return {
+        ...pos,
+        current_price,
+        current_price_cny: current_price != null ? current_price * rate : null,
+        change_pct,
+        market_value,
+        market_value_cny,
+        pnl,
+        pnl_pct,
+        exchange_rate: pos.market === 'HK' || pos.market === 'US' ? rate : null,
+      }
+    })
+
+    const accPnl = accMarketValue - accCost
+    const accPnlPct = accCost > 0 ? (accPnl / accCost * 100) : 0
+    const accTotalAssets = accMarketValue + account.available_funds
+
+    grandMarketValue += accMarketValue
+    grandCost += accCost
+    grandAvailable += account.available_funds
+
+    return {
+      ...account,
+      total_market_value: round2(accMarketValue),
+      total_cost: round2(accCost),
+      total_pnl: round2(accPnl),
+      total_pnl_pct: round2(accPnlPct),
+      total_assets: round2(accTotalAssets),
+      positions,
+    }
+  })
+
+  const grandPnl = grandMarketValue - grandCost
+  const grandPnlPct = grandCost > 0 ? (grandPnl / grandCost * 100) : 0
+  const grandTotalAssets = grandMarketValue + grandAvailable
+
+  return {
+    ...portfolio,
+    accounts,
+    total: {
+      total_market_value: round2(grandMarketValue),
+      total_cost: round2(grandCost),
+      total_pnl: round2(grandPnl),
+      total_pnl_pct: round2(grandPnlPct),
+      available_funds: round2(grandAvailable),
+      total_assets: round2(grandTotalAssets),
+    },
+  }
+}
+
 export default function StocksPage() {
   const [stocks, setStocks] = useState<Stock[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
@@ -189,11 +294,13 @@ export default function StocksPage() {
 
   // Portfolio
   const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null)
+  const [portfolioRaw, setPortfolioRaw] = useState<PortfolioSummary | null>(null)
   const [portfolioLoading, setPortfolioLoading] = useState(false)
   const [expandedAccounts, setExpandedAccounts] = useState<Set<number>>(new Set())
 
   // Quotes for all stocks (used in stock list)
-  const [quotes, setQuotes] = useState<Record<string, { current_price: number; change_pct: number }>>({})
+  const [quotes, setQuotes] = useState<Record<string, { current_price: number | null; change_pct: number | null }>>({})
+  const [quotesLoading, setQuotesLoading] = useState(false)
 
   // Auto-refresh (持久化到 localStorage)
   const [autoRefresh, setAutoRefresh] = useLocalStorage('panwatch_stocks_autoRefresh', false)
@@ -218,6 +325,13 @@ export default function StocksPage() {
   const [newsDialogSymbol, setNewsDialogSymbol] = useState<string>('')  // 空=全部, 否则=指定股票
   const [news, setNews] = useState<NewsItem[]>([])
   const [newsLoading, setNewsLoading] = useState(false)
+
+  // Kline Dialog
+  const [klineDialogOpen, setKlineDialogOpen] = useState(false)
+  const [klineDialogSymbol, setKlineDialogSymbol] = useState('')
+  const [klineDialogMarket, setKlineDialogMarket] = useState('CN')
+  const [klineDialogName, setKlineDialogName] = useState<string | undefined>(undefined)
+  const [klineDialogHasPosition, setKlineDialogHasPosition] = useState<boolean>(false)
 
   // Market status
   const [marketStatus, setMarketStatus] = useState<MarketStatus[]>([])
@@ -309,13 +423,10 @@ export default function StocksPage() {
   const loadPortfolio = async () => {
     setPortfolioLoading(true)
     try {
-      // 核心数据：portfolio/summary 已包含 quotes
-      const portfolioData = await fetchAPI<PortfolioSummary>('/portfolio/summary')
-      setPortfolio(portfolioData)
-      // 使用 portfolio 返回的 quotes（避免额外 API 调用）
-      if (portfolioData.quotes) {
-        setQuotes(portfolioData.quotes)
-      }
+      // 核心数据：仅本地账户/持仓
+      const portfolioData = await fetchAPI<PortfolioSummary>('/portfolio/summary?include_quotes=false')
+      setPortfolioRaw(portfolioData)
+      setPortfolio(mergePortfolioQuotes(portfolioData, quotes))
 
       // 市场状态（非核心，失败不影响页面）
       try {
@@ -330,6 +441,66 @@ export default function StocksPage() {
       setPortfolioLoading(false)
     }
   }
+
+  const buildQuoteItems = useCallback((): QuoteRequestItem[] => {
+    const items: QuoteRequestItem[] = []
+    const seen = new Set<string>()
+
+    for (const stock of stocks) {
+      if (!stock.enabled) continue
+      const key = `${stock.market}:${stock.symbol}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      items.push({ symbol: stock.symbol, market: stock.market })
+    }
+
+    for (const account of portfolioRaw?.accounts || []) {
+      for (const pos of account.positions) {
+        const key = `${pos.market}:${pos.symbol}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        items.push({ symbol: pos.symbol, market: pos.market })
+      }
+    }
+
+    return items
+  }, [stocks, portfolioRaw])
+
+  const refreshQuotes = useCallback(async () => {
+    const items = buildQuoteItems()
+    if (items.length === 0) return
+
+    setQuotesLoading(true)
+    try {
+      const data = await fetchAPI<QuoteResponse[]>('/quotes/batch', {
+        method: 'POST',
+        body: JSON.stringify({ items }),
+      })
+      const map: Record<string, { current_price: number | null; change_pct: number | null }> = {}
+      for (const item of data) {
+        map[item.symbol] = {
+          current_price: item.current_price ?? null,
+          change_pct: item.change_pct ?? null,
+        }
+      }
+      setQuotes(map)
+      setLastRefreshTime(new Date())
+    } catch (e) {
+      console.warn('刷新行情失败:', e)
+    } finally {
+      setQuotesLoading(false)
+    }
+  }, [buildQuoteItems])
+
+  useEffect(() => {
+    if (!portfolioRaw) return
+    setPortfolio(mergePortfolioQuotes(portfolioRaw, quotes))
+  }, [portfolioRaw, quotes])
+
+  useEffect(() => {
+    if (stocks.length === 0 && (!portfolioRaw || portfolioRaw.accounts.length === 0)) return
+    refreshQuotes()
+  }, [stocks, portfolioRaw, refreshQuotes])
 
   // Scan for intraday alerts and load suggestions
   const scanAlerts = useCallback(async () => {
@@ -401,6 +572,14 @@ export default function StocksPage() {
     }
   }, [])
 
+  const openKlineDialog = useCallback((symbol: string, market: string, name?: string, hasPosition?: boolean) => {
+    setKlineDialogSymbol(symbol)
+    setKlineDialogMarket(market || 'CN')
+    setKlineDialogName(name)
+    setKlineDialogHasPosition(!!hasPosition)
+    setKlineDialogOpen(true)
+  }, [])
+
   // Open news dialog - pass stock name for more stable search
   const openNewsDialog = useCallback((stockName?: string) => {
     setNewsDialogSymbol(stockName || '')  // 存储名称用于 UI 显示
@@ -408,10 +587,10 @@ export default function StocksPage() {
     loadNews(stockName)
   }, [loadNews])
 
-  // Combined refresh: portfolio + alerts + pool suggestions
+  // Refresh quotes only (decoupled from portfolio and scans)
   const handleRefresh = useCallback(async () => {
-    await Promise.all([loadPortfolio(), scanAlerts(), loadPoolSuggestions()])
-  }, [scanAlerts])
+    await refreshQuotes()
+  }, [refreshQuotes])
 
   useEffect(() => { load(); loadPortfolio(); loadPoolSuggestions() }, [])
 
@@ -427,11 +606,9 @@ export default function StocksPage() {
   // Auto-refresh timer
   useEffect(() => {
     if (autoRefresh) {
-      // Initial scan
-      scanAlerts()
-      // Set up interval
+      refreshQuotes()
       refreshTimerRef.current = setInterval(() => {
-        handleRefresh()
+        refreshQuotes()
       }, refreshInterval * 1000)
     } else {
       // Clear interval when disabled
@@ -446,7 +623,7 @@ export default function StocksPage() {
         clearInterval(refreshTimerRef.current)
       }
     }
-  }, [autoRefresh, refreshInterval, handleRefresh, scanAlerts])
+  }, [autoRefresh, refreshInterval, refreshQuotes])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -797,7 +974,7 @@ export default function StocksPage() {
 
     // 如果没有池建议，使用扫描结果
     const scanSug = suggestions[symbol]
-    if (scanSug?.suggestion) {
+    if (scanSug) {
       return {
         suggestion: scanSug.suggestion,
         kline: scanSug.kline,
@@ -936,9 +1113,12 @@ export default function StocksPage() {
               )}
             </div>
             {/* Buttons */}
-            <Button variant="secondary" onClick={handleRefresh} disabled={portfolioLoading || scanning}>
-              <RefreshCw className={`w-4 h-4 ${portfolioLoading || scanning ? 'animate-spin' : ''}`} />
+            <Button variant="secondary" onClick={handleRefresh} disabled={quotesLoading}>
+              <RefreshCw className={`w-4 h-4 ${quotesLoading ? 'animate-spin' : ''}`} />
               刷新
+            </Button>
+            <Button variant="secondary" onClick={scanAlerts} disabled={scanning}>
+              <Bot className="w-4 h-4" /> 扫描
             </Button>
             <Button variant="secondary" onClick={() => openAccountDialog()}>
               <Building2 className="w-4 h-4" /> 添加账户
@@ -949,8 +1129,11 @@ export default function StocksPage() {
           </div>
           {/* Mobile buttons */}
           <div className="flex md:hidden items-center gap-1.5">
-            <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={handleRefresh} disabled={portfolioLoading || scanning}>
-              <RefreshCw className={`w-4 h-4 ${portfolioLoading || scanning ? 'animate-spin' : ''}`} />
+            <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={handleRefresh} disabled={quotesLoading}>
+              <RefreshCw className={`w-4 h-4 ${quotesLoading ? 'animate-spin' : ''}`} />
+            </Button>
+            <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={scanAlerts} disabled={scanning}>
+              <Bot className="w-4 h-4" />
             </Button>
             <Button variant="secondary" size="sm" className="h-8 w-8 p-0" onClick={() => openAccountDialog()}>
               <Building2 className="w-4 h-4" />
@@ -1259,7 +1442,7 @@ export default function StocksPage() {
                                     <span className="ml-1.5 text-[12px] text-muted-foreground">{pos.name}</span>
                                     {(() => {
                                       const { suggestion, kline } = getSuggestionForStock(pos.symbol)
-                                      return suggestion ? (
+                                      return (suggestion || kline) ? (
                                         <span className="ml-2">
                                           <SuggestionBadge
                                             suggestion={suggestion}
@@ -1326,6 +1509,7 @@ export default function StocksPage() {
                                   </td>
                                   <td className="px-4 py-2.5 text-center">
                                     <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openKlineDialog(pos.symbol, pos.market, pos.name, true)} title="K线指标"><BarChart3 className="w-3 h-3" /></Button>
                                       <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openNewsDialog(pos.name)} title="相关资讯"><Newspaper className="w-3 h-3" /></Button>
                                       <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openPositionDialog(account.id, pos)}><Pencil className="w-3 h-3" /></Button>
                                       <Button variant="ghost" size="icon" className="h-7 w-7 hover:text-destructive" onClick={() => handleDeletePosition(pos.id)}><Trash2 className="w-3 h-3" /></Button>
@@ -1364,7 +1548,7 @@ export default function StocksPage() {
                                   )}
                                   {(() => {
                                     const { suggestion, kline } = getSuggestionForStock(pos.symbol)
-                                    return suggestion ? (
+                                    return (suggestion || kline) ? (
                                       <SuggestionBadge
                                         suggestion={suggestion}
                                         stockName={pos.name}
@@ -1407,6 +1591,7 @@ export default function StocksPage() {
                                   )}
                                 </div>
                                 <div className="flex items-center gap-1">
+                                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openKlineDialog(pos.symbol, pos.market, pos.name, true)} title="K线指标"><BarChart3 className="w-3 h-3" /></Button>
                                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openNewsDialog(pos.name)}><Newspaper className="w-3 h-3" /></Button>
                                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openPositionDialog(account.id, pos)}><Pencil className="w-3 h-3" /></Button>
                                   <Button variant="ghost" size="icon" className="h-7 w-7 hover:text-destructive" onClick={() => handleDeletePosition(pos.id)}><Trash2 className="w-3 h-3" /></Button>
@@ -1487,6 +1672,15 @@ export default function StocksPage() {
                     variant="ghost"
                     size="icon"
                     className="h-5 w-5 ml-1"
+                    onClick={(e) => { e.stopPropagation(); openKlineDialog(stock.symbol, stock.market, stock.name, false) }}
+                    title="K线指标"
+                  >
+                    <BarChart3 className="w-3 h-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-5 w-5 ml-1"
                     onClick={(e) => { e.stopPropagation(); openNewsDialog(stock.name) }}
                     title="相关资讯"
                   >
@@ -1506,6 +1700,16 @@ export default function StocksPage() {
           </div>
         </div>
       )}
+
+      {/* Kline Dialog */}
+      <KlineSummaryDialog
+        open={klineDialogOpen}
+        onOpenChange={setKlineDialogOpen}
+        symbol={klineDialogSymbol}
+        market={klineDialogMarket}
+        stockName={klineDialogName}
+        hasPosition={klineDialogHasPosition}
+      />
 
       {/* Account Dialog */}
       <Dialog open={accountDialogOpen} onOpenChange={setAccountDialogOpen}>

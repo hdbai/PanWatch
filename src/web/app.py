@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.web.api import stocks, agents, settings, logs, providers, channels, datasources, accounts, history, news, market, auth, suggestions
+from src.web.api import stocks, agents, settings, logs, providers, channels, datasources, accounts, history, news, market, auth, suggestions, quotes, klines
 from src.web.api.auth import get_current_user
 from src.web.api.settings import get_app_version
 from src.web.response import ResponseWrapperMiddleware
@@ -29,6 +29,8 @@ app.include_router(market.router, prefix="/api/market", tags=["market"])
 # 需要登录的路由
 protected = [Depends(get_current_user)]
 app.include_router(stocks.router, prefix="/api/stocks", tags=["stocks"], dependencies=protected)
+app.include_router(quotes.router, prefix="/api/quotes", tags=["quotes"], dependencies=protected)
+app.include_router(klines.router, prefix="/api/klines", tags=["klines"], dependencies=protected)
 app.include_router(accounts.router, prefix="/api", tags=["accounts"], dependencies=protected)
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"], dependencies=protected)
 app.include_router(providers.router, prefix="/api/providers", tags=["providers"], dependencies=protected)
