@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Plus, Trash2, Pencil, Search, X, TrendingUp, Bot, Play, RefreshCw, Wallet, PiggyBank, ArrowUpRight, ArrowDownRight, Building2, ChevronDown, ChevronRight, Cpu, Bell, Clock, Newspaper, ExternalLink, BarChart3 } from 'lucide-react'
 import { fetchAPI, useLocalStorage, type AIService, type NotifyChannel } from '@/lib/utils'
 import { SuggestionBadge, type SuggestionInfo, type KlineSummary } from '@/components/suggestion-badge'
@@ -379,6 +380,7 @@ export default function StocksPage() {
   const [stockListFilter, setStockListFilter] = useState('')  // '' = 全部, 'CN' = A股, 'HK' = 港股, 'US' = 美股
 
   const { toast } = useToast()
+  const navigate = useNavigate()
   const searchTimer = useRef<ReturnType<typeof setTimeout>>()
   const dropdownRef = useRef<HTMLDivElement>(null)
 
@@ -588,6 +590,10 @@ export default function StocksPage() {
     setNewsDialogOpen(true)
     loadNews(stockName)
   }, [loadNews])
+
+  const openStockDetail = useCallback((stockSymbol: string, stockMarket: string) => {
+    navigate(`/stock/${encodeURIComponent(stockMarket)}/${encodeURIComponent(stockSymbol)}`)
+  }, [navigate])
 
   // Refresh quotes only (decoupled from portfolio and scans)
   const handleRefresh = useCallback(async () => {
@@ -1571,6 +1577,7 @@ export default function StocksPage() {
                                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openKlineDialog(pos.symbol, pos.market, pos.name, true)} title="K线指标"><BarChart3 className="w-3 h-3" /></Button>
                                       ) : null })()}
                                       <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openNewsDialog(pos.name)} title="相关资讯"><Newspaper className="w-3 h-3" /></Button>
+                                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openStockDetail(pos.symbol, pos.market)} title="详情"><ExternalLink className="w-3 h-3" /></Button>
                                       <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openPositionDialog(account.id, pos)}><Pencil className="w-3 h-3" /></Button>
                                       <Button variant="ghost" size="icon" className="h-7 w-7 hover:text-destructive" onClick={() => handleDeletePosition(pos.id)}><Trash2 className="w-3 h-3" /></Button>
                                     </div>
@@ -1668,6 +1675,7 @@ export default function StocksPage() {
                                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openKlineDialog(pos.symbol, pos.market, pos.name, true)} title="K线指标"><BarChart3 className="w-3 h-3" /></Button>
                                   ) : null })()}
                                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openNewsDialog(pos.name)}><Newspaper className="w-3 h-3" /></Button>
+                                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openStockDetail(pos.symbol, pos.market)} title="详情"><ExternalLink className="w-3 h-3" /></Button>
                                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openPositionDialog(account.id, pos)}><Pencil className="w-3 h-3" /></Button>
                                   <Button variant="ghost" size="icon" className="h-7 w-7 hover:text-destructive" onClick={() => handleDeletePosition(pos.id)}><Trash2 className="w-3 h-3" /></Button>
                                 </div>
@@ -1768,6 +1776,15 @@ export default function StocksPage() {
                     title="相关资讯"
                   >
                     <Newspaper className="w-3 h-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-5 w-5 ml-1"
+                    onClick={(e) => { e.stopPropagation(); openStockDetail(stock.symbol, stock.market) }}
+                    title="详情"
+                  >
+                    <ExternalLink className="w-3 h-3" />
                   </Button>
                   <Button
                     variant="ghost"
