@@ -233,6 +233,7 @@ export default function DashboardPage() {
   const [klineDialogMarket, setKlineDialogMarket] = useState('CN')
   const [klineDialogName, setKlineDialogName] = useState<string | undefined>(undefined)
   const [klineDialogHasPosition, setKlineDialogHasPosition] = useState(false)
+  const [klineDialogInitialSummary, setKlineDialogInitialSummary] = useState<KlineSummary | null>(null)
 
   // Monitor stocks
   const [monitorStocks, setMonitorStocks] = useState<MonitorStock[]>([])
@@ -373,11 +374,12 @@ export default function DashboardPage() {
     }
   }, [buildQuoteItems])
 
-  const openKlineDialog = useCallback((symbol: string, market: string, name?: string, hasPosition?: boolean) => {
+  const openKlineDialog = useCallback((symbol: string, market: string, name?: string, hasPosition?: boolean, initialSummary?: KlineSummary | null) => {
     setKlineDialogSymbol(symbol)
     setKlineDialogMarket(market || 'CN')
     setKlineDialogName(name)
     setKlineDialogHasPosition(!!hasPosition)
+    setKlineDialogInitialSummary(initialSummary || null)
     setKlineDialogOpen(true)
   }, [])
 
@@ -495,6 +497,7 @@ export default function DashboardPage() {
         market={klineDialogMarket}
         stockName={klineDialogName}
         hasPosition={klineDialogHasPosition}
+        initialSummary={klineDialogInitialSummary as any}
       />
 
       {/* Header */}

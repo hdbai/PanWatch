@@ -21,6 +21,12 @@ export interface SuggestionInfo {
 }
 
 export interface KlineSummary {
+  // meta (from backend)
+  timeframe?: string
+  computed_at?: string
+  asof?: string
+  params?: Record<string, any>
+
   trend: string
   macd_status: string
   macd_cross?: string

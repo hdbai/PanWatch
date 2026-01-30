@@ -1,7 +1,8 @@
 """K线和技术指标采集器 - 基于腾讯 API（更稳定）"""
+
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 
@@ -16,6 +17,7 @@ TENCENT_KLINE_URL = "http://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 @dataclass
 class KlineData:
     """K线数据"""
+
     date: str
     open: float
     close: float
@@ -27,6 +29,7 @@ class KlineData:
 @dataclass
 class TechnicalIndicators:
     """技术指标"""
+
     # 均线
     ma5: float | None = None
     ma10: float | None = None
@@ -104,7 +107,9 @@ def _ema(data: list[float], period: int) -> list[float]:
     return result
 
 
-def _calculate_macd(closes: list[float], fast: int = 12, slow: int = 26, signal: int = 9) -> tuple[list[float], list[float], list[float]] | None:
+def _calculate_macd(
+    closes: list[float], fast: int = 12, slow: int = 26, signal: int = 9
+) -> tuple[list[float], list[float], list[float]] | None:
     """计算 MACD，返回完整序列用于判断交叉"""
     if len(closes) < slow + signal:
         return None
@@ -143,7 +148,9 @@ def _calculate_rsi(closes: list[float], period: int) -> float | None:
     return 100 - (100 / (1 + rs))
 
 
-def _calculate_kdj(klines: list[KlineData], n: int = 9, m1: int = 3, m2: int = 3) -> tuple[list[float], list[float], list[float]] | None:
+def _calculate_kdj(
+    klines: list[KlineData], n: int = 9, m1: int = 3, m2: int = 3
+) -> tuple[list[float], list[float], list[float]] | None:
     """计算 KDJ，返回完整序列"""
     if len(klines) < n:
         return None
@@ -153,7 +160,7 @@ def _calculate_kdj(klines: list[KlineData], n: int = 9, m1: int = 3, m2: int = 3
     j_values = []
 
     for i in range(n - 1, len(klines)):
-        period_klines = klines[i - n + 1:i + 1]
+        period_klines = klines[i - n + 1 : i + 1]
         highest = max(k.high for k in period_klines)
         lowest = min(k.low for k in period_klines)
         close = klines[i].close
@@ -179,7 +186,9 @@ def _calculate_kdj(klines: list[KlineData], n: int = 9, m1: int = 3, m2: int = 3
     return k_values, d_values, j_values
 
 
-def _calculate_boll(closes: list[float], period: int = 20, num_std: int = 2) -> tuple[float, float, float, float] | None:
+def _calculate_boll(
+    closes: list[float], period: int = 20, num_std: int = 2
+) -> tuple[float, float, float, float] | None:
     """计算布林带：上轨、中轨、下轨、带宽"""
     if len(closes) < period:
         return None
@@ -187,7 +196,7 @@ def _calculate_boll(closes: list[float], period: int = 20, num_std: int = 2) -> 
     recent = closes[-period:]
     mid = sum(recent) / period
     variance = sum((x - mid) ** 2 for x in recent) / period
-    std = variance ** 0.5
+    std = variance**0.5
 
     upper = mid + num_std * std
     lower = mid - num_std * std
@@ -258,7 +267,9 @@ def _detect_kline_pattern(klines: list[KlineData]) -> str | None:
     return None
 
 
-def _find_cross_days(series1: list[float], series2: list[float], cross_type: str) -> int | None:
+def _find_cross_days(
+    series1: list[float], series2: list[float], cross_type: str
+) -> int | None:
     """找到最近一次交叉距今的天数"""
     if len(series1) < 2 or len(series2) < 2:
         return None
@@ -306,6 +317,7 @@ class KlineCollector:
                 json_str = json_str[:-1]
 
             import json
+
             data = json.loads(json_str)
 
             # 解析数据 - 兼容多种 API 格式
@@ -322,19 +334,23 @@ class KlineCollector:
                 day_data = raw_data
 
             if not day_data:
-                logger.warning(f"K线数据为空 - symbol: {symbol}, code: {data.get('code')}, msg: {data.get('msg')}, data长度: {len(raw_data) if isinstance(raw_data, list) else 'N/A'}")
+                logger.warning(
+                    f"K线数据为空 - symbol: {symbol}, code: {data.get('code')}, msg: {data.get('msg')}, data长度: {len(raw_data) if isinstance(raw_data, list) else 'N/A'}"
+                )
 
             klines = []
             for item in day_data:
                 if len(item) >= 5:
-                    klines.append(KlineData(
-                        date=item[0],
-                        open=float(item[1]),
-                        close=float(item[2]),
-                        high=float(item[3]),
-                        low=float(item[4]),
-                        volume=float(item[5]) if len(item) > 5 else 0,
-                    ))
+                    klines.append(
+                        KlineData(
+                            date=item[0],
+                            open=float(item[1]),
+                            close=float(item[2]),
+                            high=float(item[3]),
+                            low=float(item[4]),
+                            volume=float(item[5]) if len(item) > 5 else 0,
+                        )
+                    )
 
             return klines
 
@@ -507,7 +523,11 @@ class KlineCollector:
 
         # 最近5日表现
         recent_5 = klines[-5:] if len(klines) >= 5 else klines
-        up_days = sum(1 for i, k in enumerate(recent_5) if i > 0 and k.close > recent_5[i-1].close)
+        up_days = sum(
+            1
+            for i, k in enumerate(recent_5)
+            if i > 0 and k.close > recent_5[i - 1].close
+        )
 
         # 趋势判断
         trend = "数据不足"
@@ -522,7 +542,11 @@ class KlineCollector:
         # MACD 状态（更详细）
         macd_status = "无数据"
         if indicators.macd_cross:
-            days_str = f"({indicators.macd_cross_days}日)" if indicators.macd_cross_days else ""
+            days_str = (
+                f"({indicators.macd_cross_days}日)"
+                if indicators.macd_cross_days
+                else ""
+            )
             macd_status = f"{indicators.macd_cross}{days_str}"
 
         # RSI 状态
@@ -565,7 +589,22 @@ class KlineCollector:
                 else:
                     boll_status = "正常波动"
 
+        last_date = klines[-1].date if klines else None
+        now = datetime.now(timezone.utc).isoformat()
+
         return {
+            # meta
+            "timeframe": "1d",
+            "computed_at": now,
+            "asof": last_date,
+            "params": {
+                "ma": [5, 10, 20, 60],
+                "macd": {"fast": 12, "slow": 26, "signal": 9},
+                "rsi": {"periods": [6, 12, 24]},
+                "kdj": {"n": 9, "m1": 3, "m2": 3},
+                "boll": {"period": 20, "num_std": 2},
+                "support_resistance": {"windows": [5, 20, 60]},
+            },
             "last_close": last_close,
             "recent_5_up": up_days,
             "trend": trend,

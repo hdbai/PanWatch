@@ -303,6 +303,7 @@ export default function StocksPage() {
   // Quotes for all stocks (used in stock list)
   const [quotes, setQuotes] = useState<Record<string, { current_price: number | null; change_pct: number | null }>>({})
   const [quotesLoading, setQuotesLoading] = useState(false)
+  // Keyed by `${market}:${symbol}` to avoid cross-market symbol collisions
   const [klineSummaries, setKlineSummaries] = useState<Record<string, KlineSummary>>({})
 
   // Auto-refresh (持久化到 localStorage)
@@ -335,6 +336,7 @@ export default function StocksPage() {
   const [klineDialogMarket, setKlineDialogMarket] = useState('CN')
   const [klineDialogName, setKlineDialogName] = useState<string | undefined>(undefined)
   const [klineDialogHasPosition, setKlineDialogHasPosition] = useState<boolean>(false)
+  const [klineDialogInitialSummary, setKlineDialogInitialSummary] = useState<KlineSummary | null>(null)
 
   // Market status
   const [marketStatus, setMarketStatus] = useState<MarketStatus[]>([])
@@ -531,7 +533,7 @@ export default function StocksPage() {
           try {
             const res = await fetchAPI<{ symbol: string; market: string; summary: KlineSummary }>(`/klines/${encodeURIComponent(it.symbol)}/summary?market=${encodeURIComponent(it.market)}`)
             if (res && (res as any).summary) {
-              map[it.symbol] = (res as any).summary as KlineSummary
+              map[`${it.market}:${it.symbol}`] = (res as any).summary as KlineSummary
             }
           } catch {
             // ignore single failure
@@ -581,8 +583,10 @@ export default function StocksPage() {
     setKlineDialogMarket(market || 'CN')
     setKlineDialogName(name)
     setKlineDialogHasPosition(!!hasPosition)
+    const m = market || 'CN'
+    setKlineDialogInitialSummary(klineSummaries[`${m}:${symbol}`] || null)
     setKlineDialogOpen(true)
-  }, [])
+  }, [klineSummaries])
 
   // Open news dialog - pass stock name for more stable search
   const openNewsDialog = useCallback((stockName?: string) => {
@@ -993,11 +997,12 @@ export default function StocksPage() {
   }
 
   // 获取股票的建议信息（优先使用建议池，包含来源和时间信息）
-  const getSuggestionForStock = (symbol: string, hasPosition?: boolean): { suggestion: SuggestionInfo | null; kline: KlineSummary | null } => {
+  const getSuggestionForStock = (symbol: string, market: string, hasPosition?: boolean): { suggestion: SuggestionInfo | null; kline: KlineSummary | null } => {
+    const key = `${market || 'CN'}:${symbol}`
     // 优先使用建议池的建议（包含来源和时间信息）
     const poolSug = poolSuggestions[symbol]
     if (poolSug && !poolSug.is_expired) {
-      const preloadedKline = klineSummaries[symbol] || (suggestions[symbol]?.kline as any) || null
+      const preloadedKline = klineSummaries[key] || (suggestions[symbol]?.kline as any) || null
       return {
         suggestion: {
           action: poolSug.action,
@@ -1018,7 +1023,7 @@ export default function StocksPage() {
     }
 
     // 无池建议时，使用 K 线评分构建轻量建议（仅用于徽章展示）
-    const ks = klineSummaries[symbol]
+    const ks = klineSummaries[key]
     if (ks) {
       const scored = buildKlineSuggestion(ks as any, hasPosition)
       return {
@@ -1492,7 +1497,7 @@ export default function StocksPage() {
                                     <span className="font-mono text-[12px] font-semibold text-foreground">{pos.symbol}</span>
                                     <span className="ml-1.5 text-[12px] text-muted-foreground">{pos.name}</span>
                                     {(() => {
-                                      const { suggestion, kline } = getSuggestionForStock(pos.symbol, true)
+                                      const { suggestion, kline } = getSuggestionForStock(pos.symbol, pos.market, true)
                                       return (suggestion || kline) ? (
                                         <span className="ml-2">
                                           <SuggestionBadge
@@ -1573,7 +1578,7 @@ export default function StocksPage() {
                                   </td>
                                   <td className="px-4 py-2.5 text-center">
                                     <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                      {(() => { const { suggestion, kline } = getSuggestionForStock(pos.symbol, true); return (!suggestion && !kline) ? (
+                                      {(() => { const { suggestion, kline } = getSuggestionForStock(pos.symbol, pos.market, true); return (!suggestion && !kline) ? (
                                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openKlineDialog(pos.symbol, pos.market, pos.name, true)} title="K线指标"><BarChart3 className="w-3 h-3" /></Button>
                                       ) : null })()}
                                       <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openNewsDialog(pos.name)} title="相关资讯"><Newspaper className="w-3 h-3" /></Button>
@@ -1614,7 +1619,7 @@ export default function StocksPage() {
                                     </span>
                                   )}
                                   {(() => {
-                                    const { suggestion, kline } = getSuggestionForStock(pos.symbol, true)
+                                    const { suggestion, kline } = getSuggestionForStock(pos.symbol, pos.market, true)
                                     return (suggestion || kline) ? (
                                       <SuggestionBadge
                                         suggestion={suggestion}
@@ -1671,7 +1676,7 @@ export default function StocksPage() {
                                   )}
                                 </div>
                                 <div className="flex items-center gap-1">
-                                  {(() => { const { suggestion, kline } = getSuggestionForStock(pos.symbol, true); return (!suggestion && !kline) ? (
+                                  {(() => { const { suggestion, kline } = getSuggestionForStock(pos.symbol, pos.market, true); return (!suggestion && !kline) ? (
                                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openKlineDialog(pos.symbol, pos.market, pos.name, true)} title="K线指标"><BarChart3 className="w-3 h-3" /></Button>
                                   ) : null })()}
                                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openNewsDialog(pos.name)}><Newspaper className="w-3 h-3" /></Button>
@@ -1809,6 +1814,7 @@ export default function StocksPage() {
         market={klineDialogMarket}
         stockName={klineDialogName}
         hasPosition={klineDialogHasPosition}
+        initialSummary={klineDialogInitialSummary as any}
       />
 
       {/* Account Dialog */}

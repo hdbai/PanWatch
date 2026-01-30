@@ -10,6 +10,9 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { useToast } from '@/components/ui/toast'
 import { SuggestionBadge, type SuggestionInfo } from '@/components/suggestion-badge'
 import { KlineSummaryDialog } from '@/components/kline-summary-dialog'
+import { KlineIndicators } from '@/components/kline-indicators'
+import { buildKlineSuggestion } from '@/lib/kline-scorer'
+import type { KlineSummaryData } from '@/components/kline-summary-dialog'
 
 interface Stock {
   id: number
@@ -38,6 +41,47 @@ interface QuoteResponse {
   low_price: number | null
   volume: number | null
   turnover: number | null
+}
+
+interface KlineSummaryResponse {
+  symbol: string
+  market: string
+  summary: KlineSummaryData
+}
+
+interface PortfolioPosition {
+  id: number
+  stock_id: number
+  symbol: string
+  name: string
+  market: string
+  cost_price: number
+  quantity: number
+  invested_amount: number | null
+  trading_style: string | null
+  current_price: number | null
+  current_price_cny: number | null
+  change_pct: number | null
+  market_value: number | null
+  market_value_cny: number | null
+  pnl: number | null
+  pnl_pct: number | null
+  exchange_rate: number | null
+  account_name: string
+}
+
+interface PortfolioSummaryResponse {
+  accounts: Array<{
+    id: number
+    name: string
+    available_funds: number
+    total_market_value: number
+    total_cost: number
+    total_pnl: number
+    total_pnl_pct: number
+    total_assets: number
+    positions: Array<Omit<PortfolioPosition, 'account_name'>>
+  }>
 }
 
 interface NewsItem {
@@ -129,6 +173,12 @@ export default function StockDetailPage() {
   const [stock, setStock] = useState<Stock | null>(null)
   const [quote, setQuote] = useState<QuoteResponse | null>(null)
 
+  const [klineSummary, setKlineSummary] = useState<KlineSummaryData | null>(null)
+  const [klineSummaryLoading, setKlineSummaryLoading] = useState(false)
+
+  const [positions, setPositions] = useState<PortfolioPosition[]>([])
+  const [positionsLoading, setPositionsLoading] = useState(false)
+
   const [includeExpired, setIncludeExpired] = useState(false)
   const [suggestions, setSuggestions] = useState<SuggestionInfo[]>([])
 
@@ -176,6 +226,41 @@ export default function StockDetailPage() {
       toast(e instanceof Error ? e.message : '行情加载失败', 'error')
     }
   }, [symbol, market, toast])
+
+  const loadKlineSummary = useCallback(async () => {
+    if (!symbol) return
+    setKlineSummaryLoading(true)
+    try {
+      const data = await fetchAPI<KlineSummaryResponse>(`/klines/${encodeURIComponent(symbol)}/summary?market=${encodeURIComponent(market)}`)
+      setKlineSummary(data?.summary || null)
+    } catch (e) {
+      setKlineSummary(null)
+      toast(e instanceof Error ? e.message : 'K线摘要加载失败', 'error')
+    } finally {
+      setKlineSummaryLoading(false)
+    }
+  }, [symbol, market, toast])
+
+  const loadPositions = useCallback(async () => {
+    if (!symbol) return
+    setPositionsLoading(true)
+    try {
+      const data = await fetchAPI<PortfolioSummaryResponse>(`/portfolio/summary?include_quotes=true`)
+      const matched: PortfolioPosition[] = []
+      for (const acc of data?.accounts || []) {
+        for (const p of acc.positions || []) {
+          if (p.symbol === symbol && p.market === market) {
+            matched.push({ ...(p as any), account_name: acc.name })
+          }
+        }
+      }
+      setPositions(matched)
+    } catch {
+      setPositions([])
+    } finally {
+      setPositionsLoading(false)
+    }
+  }, [symbol, market])
 
   const loadSuggestions = useCallback(async () => {
     if (!symbol) return
@@ -259,11 +344,11 @@ export default function StockDetailPage() {
     setLoading(true)
     try {
       await loadStockBase()
-      await Promise.allSettled([loadQuote(), loadHistory(), loadBatchReports()])
+      await Promise.allSettled([loadQuote(), loadKlineSummary(), loadPositions(), loadHistory(), loadBatchReports()])
     } finally {
       setLoading(false)
     }
-  }, [symbol, loadStockBase, loadQuote, loadHistory, loadBatchReports])
+  }, [symbol, loadStockBase, loadQuote, loadKlineSummary, loadPositions, loadHistory, loadBatchReports])
 
   const refreshAll = useCallback(async () => {
     if (!symbol) return
@@ -272,6 +357,8 @@ export default function StockDetailPage() {
       await loadStockBase()
       await Promise.allSettled([
         loadQuote(),
+        loadKlineSummary(),
+        loadPositions(),
         loadSuggestions(),
         loadHistory(),
         loadBatchReports(),
@@ -281,7 +368,7 @@ export default function StockDetailPage() {
     } finally {
       setLoading(false)
     }
-  }, [symbol, loadStockBase, loadQuote, loadSuggestions, loadHistory, loadBatchReports, loadNews])
+  }, [symbol, loadStockBase, loadQuote, loadKlineSummary, loadPositions, loadSuggestions, loadHistory, loadBatchReports, loadNews])
 
   useEffect(() => {
     loadEssential()
@@ -321,6 +408,43 @@ export default function StockDetailPage() {
   const changeColor = quote?.change_pct != null
     ? (quote.change_pct > 0 ? 'text-rose-500' : quote.change_pct < 0 ? 'text-emerald-500' : 'text-muted-foreground')
     : 'text-muted-foreground'
+
+  const hasPosition = positions.length > 0
+
+  const holdingAgg = useMemo(() => {
+    if (positions.length === 0) return null
+    let qty = 0
+    let costCny = 0
+    let mvCny = 0
+    for (const p of positions) {
+      const rate = p.exchange_rate ?? 1
+      qty += p.quantity || 0
+      costCny += (p.cost_price || 0) * (p.quantity || 0) * rate
+      mvCny += p.market_value_cny ?? ((p.current_price_cny ?? 0) * (p.quantity || 0))
+    }
+    const pnlCny = mvCny - costCny
+    const pnlPct = costCny > 0 ? (pnlCny / costCny * 100) : 0
+    return {
+      quantity: qty,
+      cost_cny: costCny,
+      market_value_cny: mvCny,
+      pnl_cny: pnlCny,
+      pnl_pct: pnlPct,
+    }
+  }, [positions])
+
+  const tech = useMemo(() => {
+    if (!klineSummary) return null
+    return buildKlineSuggestion(klineSummary, hasPosition)
+  }, [klineSummary, hasPosition])
+
+  const techActionStyle = (action?: string) => {
+    if (action === 'buy' || action === 'add') return 'bg-rose-500 text-white'
+    if (action === 'reduce' || action === 'sell') return 'bg-emerald-600 text-white'
+    if (action === 'hold') return 'bg-amber-500 text-white'
+    if (action === 'avoid') return 'bg-red-600 text-white'
+    return 'bg-slate-500 text-white'
+  }
 
   const batchSuggestionItems = useMemo(() => {
     const items: Array<{ agent: string; record: HistoryRecord; suggestion: any }> = []
@@ -380,7 +504,8 @@ export default function StockDetailPage() {
         symbol={symbol}
         market={market}
         stockName={stock?.name || quote?.name || symbol}
-        hasPosition={false}
+        hasPosition={hasPosition}
+        initialSummary={klineSummary as any}
       />
 
       {/* Tabs */}
@@ -407,120 +532,252 @@ export default function StockDetailPage() {
 
       {/* Overview */}
       {tab === 'overview' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* Quote */}
-          <div className="card p-4">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-[13px] font-semibold text-foreground">实时行情</div>
-              <span className="text-[11px] text-muted-foreground">{quote ? '来自行情源' : '暂无数据'}</span>
-            </div>
-            {!quote ? (
-              <div className="text-[12px] text-muted-foreground py-6 text-center">暂无行情</div>
-            ) : (
-              <div className="space-y-3">
-                <div className="flex items-end justify-between gap-3">
-                  <div className="text-[26px] font-bold font-mono text-foreground">
-                    {quote.current_price != null ? formatNumber(quote.current_price) : '--'}
-                  </div>
-                  <div className={`text-[14px] font-mono ${changeColor}`}>
-                    {quote.change_pct != null ? `${quote.change_pct >= 0 ? '+' : ''}${quote.change_pct.toFixed(2)}%` : '--'}
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-[12px]">
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">昨收</span>
-                    <span className="font-mono">{formatNumber(quote.prev_close)}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">今开</span>
-                    <span className="font-mono">{formatNumber(quote.open_price)}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">最高</span>
-                    <span className="font-mono">{formatNumber(quote.high_price)}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">最低</span>
-                    <span className="font-mono">{formatNumber(quote.low_price)}</span>
-                  </div>
-                </div>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Quote */}
+            <div className="card p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[13px] font-semibold text-foreground">行情</div>
+                <span className="text-[11px] text-muted-foreground">{quote ? '实时' : '暂无数据'}</span>
               </div>
-            )}
+              {!quote ? (
+                <div className="text-[12px] text-muted-foreground py-6 text-center">暂无行情</div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-end justify-between gap-3">
+                    <div className="text-[26px] font-bold font-mono text-foreground">
+                      {quote.current_price != null ? formatNumber(quote.current_price) : '--'}
+                    </div>
+                    <div className={`text-[14px] font-mono ${changeColor}`}>
+                      {quote.change_pct != null ? `${quote.change_pct >= 0 ? '+' : ''}${quote.change_pct.toFixed(2)}%` : '--'}
+                    </div>
+                  </div>
+                  <details className="group">
+                    <summary className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">
+                      更多字段 <span className="text-[10px]">(点击展开)</span>
+                    </summary>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-[12px]">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">昨收</span>
+                        <span className="font-mono">{formatNumber(quote.prev_close)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">今开</span>
+                        <span className="font-mono">{formatNumber(quote.open_price)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">最高</span>
+                        <span className="font-mono">{formatNumber(quote.high_price)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">最低</span>
+                        <span className="font-mono">{formatNumber(quote.low_price)}</span>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+              )}
+            </div>
+
+            {/* Technical */}
+            <div className="card p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[13px] font-semibold text-foreground">技术面</div>
+                <span className="text-[11px] text-muted-foreground">{klineSummaryLoading ? '加载中' : klineSummary ? '日K' : '暂无数据'}</span>
+              </div>
+              {!klineSummary ? (
+                <div className="text-[12px] text-muted-foreground py-6 text-center">暂无 K 线摘要</div>
+              ) : (
+                <div className="space-y-3">
+                  {tech && (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`text-[11px] px-2 py-1 rounded font-medium ${techActionStyle(tech.action)}`}>
+                        {tech.action_label}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">score {tech.score}</span>
+                    </div>
+                  )}
+                  {tech && (
+                    <div className="text-[12px] font-medium text-foreground">
+                      {tech.signal}
+                    </div>
+                  )}
+                  <KlineIndicators summary={klineSummary as any} />
+                  <div className="flex items-center justify-between">
+                    <Button variant="ghost" size="sm" className="h-7" onClick={() => setKlineOpen(true)}>
+                      打开 K线/指标
+                    </Button>
+                    {klineSummary?.computed_at && (
+                      <span className="text-[10px] text-muted-foreground/60">{formatTime(klineSummary.computed_at)}</span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Holding */}
+            <div className="card p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[13px] font-semibold text-foreground">持仓视角</div>
+                <span className="text-[11px] text-muted-foreground">{positionsLoading ? '加载中' : hasPosition ? `${positions.length} 笔` : '未持仓'}</span>
+              </div>
+              {!hasPosition ? (
+                <div className="text-[12px] text-muted-foreground py-6 text-center">当前账户未持有该股票</div>
+              ) : (
+                <div className="space-y-3">
+                  {holdingAgg && (
+                    <div className="grid grid-cols-2 gap-2 text-[12px]">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">数量</span>
+                        <span className="font-mono">{holdingAgg.quantity}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">成本(CNY)</span>
+                        <span className="font-mono">{holdingAgg.cost_cny.toFixed(2)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">市值(CNY)</span>
+                        <span className="font-mono">{holdingAgg.market_value_cny.toFixed(2)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">盈亏</span>
+                        <span className={`font-mono ${holdingAgg.pnl_cny >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                          {holdingAgg.pnl_cny >= 0 ? '+' : ''}{holdingAgg.pnl_cny.toFixed(2)} ({holdingAgg.pnl_pct >= 0 ? '+' : ''}{holdingAgg.pnl_pct.toFixed(2)}%)
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  <details className="group">
+                    <summary className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">
+                      按账户展开 <span className="text-[10px]">(点击展开)</span>
+                    </summary>
+                    <div className="mt-2 space-y-2">
+                      {positions.map(p => (
+                        <div key={p.id} className="p-2 rounded bg-accent/20 text-[12px]">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-muted-foreground">{p.account_name}</span>
+                            <span className="font-mono">{p.quantity} @ {p.cost_price}</span>
+                          </div>
+                          {p.pnl != null && (
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              盈亏: {p.pnl >= 0 ? '+' : ''}{p.pnl} ({p.pnl_pct != null ? `${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct}%` : '--'})
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Suggestions */}
-          <div className="card p-4 lg:col-span-2">
-            <div className="flex items-center justify-between mb-3">
-              <div className="text-[13px] font-semibold text-foreground">最新建议</div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setIncludeExpired(v => !v)}
-                  className={`text-[11px] px-2 py-0.5 rounded transition-colors ${
-                    includeExpired
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-accent/50 text-muted-foreground hover:bg-accent'
-                  }`}
-                >
-                  {includeExpired ? '包含过期' : '不含过期'}
-                </button>
-                <Button variant="ghost" size="sm" className="h-7" onClick={() => setTab('suggestions')}>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Suggestions */}
+            <div className="card p-4 lg:col-span-2">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-[13px] font-semibold text-foreground">最新建议</div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setIncludeExpired(v => !v)}
+                    className={`text-[11px] px-2 py-0.5 rounded transition-colors ${
+                      includeExpired
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-accent/50 text-muted-foreground hover:bg-accent'
+                    }`}
+                  >
+                    {includeExpired ? '包含过期' : '不含过期'}
+                  </button>
+                  <Button variant="ghost" size="sm" className="h-7" onClick={() => setTab('suggestions')}>
+                    查看全部
+                  </Button>
+                </div>
+              </div>
+
+              {suggestions.length === 0 ? (
+                <div className="text-[12px] text-muted-foreground py-6 text-center">暂无建议</div>
+              ) : (
+                <div className="space-y-3">
+                  {suggestions.slice(0, 3).map((s, idx) => (
+                    <div key={`${s.agent_name || 's'}-${idx}`} className="p-3 rounded-lg bg-accent/20">
+                      <SuggestionBadge suggestion={s} stockName={resolvedName} stockSymbol={symbol} showFullInline />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {batchSuggestionItems.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-border/50">
+                  <div className="text-[12px] font-medium text-foreground mb-2">来自盘前/盘后/新闻的建议</div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {batchSuggestionItems.map(({ agent, record, suggestion }) => (
+                      <button
+                        key={agent}
+                        onClick={() => setDetailRecord(record)}
+                        className="text-left p-3 rounded-lg bg-accent/20 hover:bg-accent/30 transition-colors"
+                        title="点击查看报告全文"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <Badge variant="outline" className="text-[10px]">{AGENT_LABELS[agent] || agent}</Badge>
+                          <span className="text-[10px] text-muted-foreground">{record.analysis_date}</span>
+                        </div>
+                        <div className="mt-2">
+                          <SuggestionBadge
+                            suggestion={{
+                              action: suggestion.action,
+                              action_label: suggestion.action_label,
+                              signal: '',
+                              reason: suggestion.reason || '',
+                              should_alert: !!suggestion.should_alert,
+                              agent_name: agent,
+                              agent_label: AGENT_LABELS[agent] || agent,
+                            }}
+                            stockName={resolvedName}
+                            stockSymbol={symbol}
+                            showFullInline
+                          />
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* History quick */}
+            <div className="card p-4 lg:col-span-1">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-[13px] font-semibold text-foreground">最近历史</div>
+                <Button variant="ghost" size="sm" className="h-7" onClick={() => setTab('history')}>
                   查看全部
                 </Button>
               </div>
-            </div>
-
-            {suggestions.length === 0 ? (
-              <div className="text-[12px] text-muted-foreground py-6 text-center">暂无建议</div>
-            ) : (
-              <div className="space-y-3">
-                {suggestions.slice(0, 3).map((s, idx) => (
-                  <div key={`${s.agent_name || 's'}-${idx}`} className="p-3 rounded-lg bg-accent/20">
-                    <SuggestionBadge suggestion={s} stockName={resolvedName} stockSymbol={symbol} showFullInline />
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {batchSuggestionItems.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-border/50">
-                <div className="text-[12px] font-medium text-foreground mb-2">来自盘前/盘后/新闻的建议</div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {batchSuggestionItems.map(({ agent, record, suggestion }) => (
+              {history.length === 0 ? (
+                <div className="text-[12px] text-muted-foreground py-6 text-center">暂无历史记录</div>
+              ) : (
+                <div className="space-y-2">
+                  {history.slice(0, 6).map(r => (
                     <button
-                      key={agent}
-                      onClick={() => setDetailRecord(record)}
+                      key={r.id}
+                      onClick={() => setDetailRecord(r)}
                       className="text-left p-3 rounded-lg bg-accent/20 hover:bg-accent/30 transition-colors"
-                      title="点击查看报告全文"
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <Badge variant="outline" className="text-[10px]">{AGENT_LABELS[agent] || agent}</Badge>
-                        <span className="text-[10px] text-muted-foreground">{record.analysis_date}</span>
+                        <Badge variant="outline" className="text-[10px]">{AGENT_LABELS[r.agent_name] || r.agent_name}</Badge>
+                        <span className="text-[10px] text-muted-foreground">{r.analysis_date}</span>
                       </div>
-                      <div className="mt-2">
-                        <SuggestionBadge
-                          suggestion={{
-                            action: suggestion.action,
-                            action_label: suggestion.action_label,
-                            signal: '',
-                            reason: suggestion.reason || '',
-                            should_alert: !!suggestion.should_alert,
-                            agent_name: agent,
-                            agent_label: AGENT_LABELS[agent] || agent,
-                          }}
-                          stockName={resolvedName}
-                          stockSymbol={symbol}
-                          showFullInline
-                        />
+                      <div className="mt-1 text-[12px] text-foreground line-clamp-2">
+                        {r.title || '分析报告'}
                       </div>
                     </button>
                   ))}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           {/* News quick */}
-          <div className="card p-4 lg:col-span-2">
+          <div className="card p-4">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Newspaper className="w-4 h-4 text-muted-foreground" />
@@ -561,37 +818,6 @@ export default function StockDetailPage() {
                       </div>
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* History quick */}
-          <div className="card p-4 lg:col-span-1">
-            <div className="flex items-center justify-between mb-3">
-              <div className="text-[13px] font-semibold text-foreground">最近历史</div>
-              <Button variant="ghost" size="sm" className="h-7" onClick={() => setTab('history')}>
-                查看全部
-              </Button>
-            </div>
-            {history.length === 0 ? (
-              <div className="text-[12px] text-muted-foreground py-6 text-center">暂无历史记录</div>
-            ) : (
-              <div className="space-y-2">
-                {history.slice(0, 6).map(r => (
-                  <button
-                    key={r.id}
-                    onClick={() => setDetailRecord(r)}
-                    className="text-left p-3 rounded-lg bg-accent/20 hover:bg-accent/30 transition-colors"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <Badge variant="outline" className="text-[10px]">{AGENT_LABELS[r.agent_name] || r.agent_name}</Badge>
-                      <span className="text-[10px] text-muted-foreground">{r.analysis_date}</span>
-                    </div>
-                    <div className="mt-1 text-[12px] text-foreground line-clamp-2">
-                      {r.title || '分析报告'}
-                    </div>
-                  </button>
                 ))}
               </div>
             )}

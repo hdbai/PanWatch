@@ -5,6 +5,12 @@ import { buildKlineSuggestion } from '@/lib/kline-scorer'
 import { HoverPopover } from '@/components/ui/hover-popover'
 
 export interface KlineSummaryData {
+  // meta (from backend)
+  timeframe?: string
+  computed_at?: string
+  asof?: string
+  params?: Record<string, any>
+
   last_close?: number | null
   recent_5_up?: number | null
   trend?: string
@@ -58,6 +64,17 @@ interface KlineSummaryDialogProps {
   stockName?: string
   hasPosition?: boolean
   initialSummary?: KlineSummaryData | null
+}
+
+function formatLocalDateTime(iso?: string): string {
+  if (!iso) return ''
+  try {
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return ''
+    return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+  } catch {
+    return ''
+  }
 }
 
 export function KlineSummaryDialog({
@@ -159,7 +176,16 @@ export function KlineSummaryDialog({
         <DialogHeader>
           <DialogTitle>K线 / 技术指标</DialogTitle>
           <DialogDescription>
-            {stockName ? `${stockName} (${symbol})` : symbol}
+            <div className="space-y-0.5">
+              <div>{stockName ? `${stockName} (${symbol})` : symbol}</div>
+              {(effectiveSummary?.timeframe || effectiveSummary?.computed_at || effectiveSummary?.asof) && (
+                <div className="text-[11px] text-muted-foreground/70">
+                  {effectiveSummary?.timeframe ? `周期: ${effectiveSummary.timeframe}` : '周期: 1d'}
+                  {effectiveSummary?.asof ? ` · 数据截至: ${effectiveSummary.asof}` : ''}
+                  {effectiveSummary?.computed_at ? ` · 计算时间: ${formatLocalDateTime(effectiveSummary.computed_at)}` : ''}
+                </div>
+              )}
+            </div>
           </DialogDescription>
         </DialogHeader>
 
