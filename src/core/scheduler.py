@@ -8,6 +8,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from src.agents.base import BaseAgent, AgentContext
 from src.core.agent_runs import record_agent_run
+from src.models.market import MARKETS
 
 logger = logging.getLogger(__name__)
 
@@ -110,20 +111,33 @@ class AgentScheduler:
             mode = self.execution_modes.get(agent_name, "batch")
             if mode == "single" and hasattr(agent, "run_single"):
                 processed = 0
+                skipped = 0
                 errors: list[str] = []
                 for stock in list(context.watchlist):
+                    market_def = MARKETS.get(stock.market)
+                    if market_def and not market_def.is_trading_time():
+                        skipped += 1
+                        logger.info(
+                            f"[调度] 跳过 {agent.display_name} {stock.symbol}（{market_def.name} 非交易时段）"
+                        )
+                        continue
                     try:
                         await agent.run_single(context, stock.symbol)  # type: ignore[attr-defined]
                         processed += 1
                     except Exception as e:
-                        logger.error(f"Agent [{agent_name}] 单只执行失败 {stock.symbol}: {e}", exc_info=True)
+                        logger.error(
+                            f"Agent [{agent_name}] 单只执行失败 {stock.symbol}: {e}",
+                            exc_info=True,
+                        )
                         errors.append(f"{stock.symbol}: {e}")
-                logger.info(f"[调度] Agent 单只模式执行完成: {agent.display_name}（{processed}/{len(context.watchlist)}）")
+                logger.info(
+                    f"[调度] Agent 单只模式执行完成: {agent.display_name}（执行{processed}，跳过{skipped}，共{len(context.watchlist)}）"
+                )
                 duration_ms = int((time.monotonic() - start) * 1000)
                 record_agent_run(
                     agent_name=agent_name,
                     status="failed" if errors else "success",
-                    result=f"single mode processed {processed}/{len(context.watchlist)}",
+                    result=f"single mode executed {processed}, skipped {skipped}, total {len(context.watchlist)}",
                     error="; ".join(errors),
                     duration_ms=duration_ms,
                 )
