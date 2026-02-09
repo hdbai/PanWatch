@@ -395,8 +395,21 @@ export default function StocksPage() {
   const [stockListFilter, setStockListFilter] = useState('')  // '' = 全部, 'CN' = A股, 'HK' = 港股, 'US' = 美股
   const [watchlistOnlyAlerts, setWatchlistOnlyAlerts] = useLocalStorage<boolean>('panwatch_watchlist_only_alerts', false)
 
+  // Remove watchlist modal
+  const [removeWatchStock, setRemoveWatchStock] = useState<Stock | null>(null)
+  const [removingWatchStock, setRemovingWatchStock] = useState(false)
+
   const { toast } = useToast()
   const navigate = useNavigate()
+
+  const isSuppressCardClick = () => {
+    try {
+      const until = (window as any).__panwatch_suppress_card_click_until
+      return typeof until === 'number' && Date.now() < until
+    } catch {
+      return false
+    }
+  }
   const searchTimer = useRef<ReturnType<typeof setTimeout>>()
   const dropdownRef = useRef<HTMLDivElement>(null)
 
@@ -818,11 +831,24 @@ export default function StocksPage() {
     toast('股票已添加', 'success')
   }
 
-  const handleDeleteStock = async (id: number) => {
-    if (!confirm('确定删除？这将同时删除该股票的所有持仓记录')) return
-    await fetchAPI(`/stocks/${id}`, { method: 'DELETE' })
-    load()
-    loadPortfolio()
+  const hasAnyPositionForStockId = (id: number): boolean => {
+    return (portfolio?.accounts || []).some(acc => (acc.positions || []).some(p => p.stock_id === id))
+  }
+
+  const removeFromWatchlist = async (stock: Stock) => {
+    setRemovingWatchStock(true)
+    try {
+      await fetchAPI(`/stocks/${stock.id}`, { method: 'PUT', body: JSON.stringify({ enabled: false }) })
+      toast('已移除关注（不会影响持仓）', 'success')
+      setRemoveWatchStock(null)
+      load()
+      // 持仓独立存储，但刷新一次可避免 UI 误解
+      loadPortfolio()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '移除失败', 'error')
+    } finally {
+      setRemovingWatchStock(false)
+    }
   }
 
   // ========== Account handlers ==========
@@ -1959,7 +1985,10 @@ export default function StocksPage() {
                   <div
                     key={stock.id}
                     className="group rounded-xl border border-border/40 bg-background/30 hover:bg-accent/20 transition-colors p-3 cursor-pointer"
-                    onClick={() => { setAgentDialogStock(stock) }}
+                    onClick={() => {
+                      if (isSuppressCardClick()) return
+                      setAgentDialogStock(stock)
+                    }}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -2045,8 +2074,8 @@ export default function StocksPage() {
                           variant="ghost"
                           size="icon"
                           className="h-7 w-7 hover:text-destructive"
-                          onClick={() => handleDeleteStock(stock.id)}
-                          title="移除关注"
+                          onClick={() => setRemoveWatchStock(stock)}
+                          title="移除关注（不影响持仓）"
                         >
                           <X className="w-3.5 h-3.5" />
                         </Button>
@@ -2070,6 +2099,38 @@ export default function StocksPage() {
         hasPosition={klineDialogHasPosition}
         initialSummary={klineDialogInitialSummary as any}
       />
+
+      {/* Remove Watchlist Dialog */}
+      <Dialog open={!!removeWatchStock} onOpenChange={(open) => { if (!open) setRemoveWatchStock(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>移除关注</DialogTitle>
+            <DialogDescription>仅从关注列表移除，不会删除持仓</DialogDescription>
+          </DialogHeader>
+          {removeWatchStock && (
+            <div className="space-y-4 mt-2">
+              <div className="rounded-lg border border-border/40 bg-accent/20 p-3">
+                <div className="text-[13px] font-semibold text-foreground">
+                  {removeWatchStock.name}
+                  <span className="ml-2 font-mono text-[12px] text-muted-foreground">{removeWatchStock.symbol}</span>
+                </div>
+                <div className="mt-1 text-[12px] text-muted-foreground">
+                  {hasAnyPositionForStockId(removeWatchStock.id)
+                    ? '该股票在持仓中。移除关注不影响持仓；如需删除持仓，请到“持仓”Tab 删除持仓记录。'
+                    : '移除后将不再出现在关注列表，也不会在自选行情中拉取。'}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" onClick={() => setRemoveWatchStock(null)} disabled={removingWatchStock}>取消</Button>
+                <Button variant="destructive" onClick={() => removeFromWatchlist(removeWatchStock)} disabled={removingWatchStock}>
+                  {removingWatchStock ? '处理中…' : '移除关注'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Account Dialog */}
       <Dialog open={accountDialogOpen} onOpenChange={setAccountDialogOpen}>

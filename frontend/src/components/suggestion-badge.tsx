@@ -208,6 +208,17 @@ export function SuggestionBadge({
     }
   }
 
+  const onDialogOpenChange = (open: boolean) => {
+    setDialogOpen(open)
+    if (!open) {
+      try {
+        ;(window as any).__panwatch_suppress_card_click_until = Date.now() + 600
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   if (!suggestion && !kline) return null
 
   // Dashboard 模式：行内显示完整信息（仅建议 badge）
@@ -279,8 +290,12 @@ export function SuggestionBadge({
           </div>
         </div>
 
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent className="max-w-md">
+        <Dialog open={dialogOpen} onOpenChange={onDialogOpenChange}>
+          <DialogContent
+            className="max-w-md"
+            onPointerDownOutside={(e) => { e.preventDefault(); setDialogOpen(false) }}
+            onInteractOutside={(e) => { e.preventDefault(); setDialogOpen(false) }}
+          >
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <span className={`relative inline-flex text-[13px] px-3 py-1.5 rounded font-medium whitespace-nowrap ${colorClass}`}>
@@ -492,8 +507,12 @@ export function SuggestionBadge({
         )}
       </div>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-md">
+      <Dialog open={dialogOpen} onOpenChange={onDialogOpenChange}>
+        <DialogContent
+          className="max-w-md"
+          onPointerDownOutside={(e) => { e.preventDefault(); setDialogOpen(false) }}
+          onInteractOutside={(e) => { e.preventDefault(); setDialogOpen(false) }}
+        >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <span className={`text-[12px] px-2 py-1 rounded font-medium ${colorClass}`}>
