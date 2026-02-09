@@ -65,6 +65,8 @@ class DailyReportAgent(BaseAgent):
             portfolio=context.portfolio,
             include_technical=True,
             include_capital_flow=True,
+            include_events=True,
+            events_days=7,
         )
 
         if not all_indices and not any(p.quote for p in packs.values()):
@@ -237,6 +239,20 @@ class DailyReportAgent(BaseAgent):
                     )
             else:
                 lines.append("- 相关新闻：暂无")
+
+            # 事件快照（近 N 天，来自公告结构化）
+            events = pack.events.items if (pack and pack.events) else []
+            important_events = [e for e in events if (e.get("importance") or 0) >= 2]
+            if important_events:
+                lines.append("- 事件：")
+                for e in important_events[:2]:
+                    time_str = e.get("time") or ""
+                    et = e.get("event_type") or "notice"
+                    title = e.get("title") or ""
+                    link = f"[原文]({e.get('url')})" if e.get("url") else ""
+                    lines.append(
+                        f"  - [{time_str}] ({et}) {title}{(' ' + link) if link else ''}"
+                    )
 
             # 持仓信息
             position = None

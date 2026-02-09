@@ -48,6 +48,7 @@ const DATASOURCE_TYPES = {
   kline: { label: 'K线数据', icon: LineChart, color: 'text-orange-500' },
   capital_flow: { label: '资金流向', icon: DollarSign, color: 'text-yellow-500' },
   quote: { label: '实时行情', icon: TrendingUp, color: 'text-emerald-500' },
+  events: { label: '事件日历', icon: Layers, color: 'text-violet-500' },
   chart: { label: 'K线截图', icon: Image, color: 'text-purple-500' },
 }
 
@@ -385,6 +386,18 @@ export default function DataSourcesPage() {
                       <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-accent/30">
                         <span className="text-[12px] text-foreground flex-1">{newsItem.title}</span>
                         <span className="text-[11px] text-muted-foreground flex-shrink-0">{newsItem.time}</span>
+                      </div>
+                    )
+                  })}
+
+                  {/* Events type */}
+                  {testResult.source_type === 'events' && testResult.data.map((item, i) => {
+                    const ev = item as { title?: string; time?: string; event_type?: string }
+                    return (
+                      <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-accent/30">
+                        <span className="text-[11px] font-mono text-muted-foreground/80 flex-shrink-0">{ev.event_type || 'notice'}</span>
+                        <span className="text-[12px] text-foreground flex-1">{ev.title}</span>
+                        <span className="text-[11px] text-muted-foreground flex-shrink-0">{ev.time}</span>
                       </div>
                     )
                   })}

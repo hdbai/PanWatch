@@ -28,6 +28,12 @@ class NewsSnapshot:
 
 
 @dataclass(frozen=True)
+class EventsSnapshot:
+    days: int
+    items: list[dict] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class SignalPack:
     symbol: str
     name: str
@@ -38,6 +44,7 @@ class SignalPack:
     position: PositionSnapshot | None = None
     news: NewsSnapshot | None = None
     capital_flow: dict | None = None
+    events: EventsSnapshot | None = None
     sources: dict[str, str] = field(default_factory=dict)
     missing: list[str] = field(default_factory=list)
 
@@ -56,6 +63,8 @@ class SignalPackBuilder:
         self._news_cache: dict[tuple[str, int], list[NewsItem]] = {}
         self._flow_cache: dict[tuple[MarketCode, str], dict] = {}
         self._flow_source_cache: dict[tuple[MarketCode, str], str] = {}
+        self._events_cache: dict[tuple[str, int], list[dict]] = {}
+        self._events_source_cache: dict[tuple[str, int], str] = {}
 
     @staticmethod
     def _source_policy(
@@ -112,6 +121,8 @@ class SignalPackBuilder:
         portfolio,
         include_technical: bool = True,
         include_capital_flow: bool = False,
+        include_events: bool = False,
+        events_days: int = 7,
     ) -> dict[str, SignalPack]:
         """Build packs for multiple symbols.
 
@@ -121,6 +132,8 @@ class SignalPackBuilder:
             news_hours: window for news
             portfolio: AgentContext.portfolio
             include_capital_flow: whether to include CN capital flow snapshot
+            include_events: whether to include event snapshot
+            events_days: lookback window in days
         """
 
         computed_at = self._now_iso()
@@ -134,6 +147,10 @@ class SignalPackBuilder:
         )
         flow_providers, flow_disabled = self._source_policy(
             "capital_flow", default_providers=["eastmoney"]
+        )
+
+        events_providers, events_disabled = self._source_policy(
+            "events", default_providers=["eastmoney"]
         )
 
         # 1) Quotes (batch per market)
@@ -318,7 +335,70 @@ class SignalPackBuilder:
                     except Exception as e:
                         logger.warning(f"SignalPack capital_flow 采集失败: {e}")
 
-        # 5) Position
+        # 5) Events
+        events_by_symbol: dict[str, list[dict]] = {}
+        events_key = (",".join(sorted(symbol_set)), int(events_days))
+        if include_events:
+            if events_key not in self._events_cache:
+                if events_disabled:
+                    self._events_cache[events_key] = []
+                    self._events_source_cache[events_key] = "disabled"
+                else:
+                    last_err = None
+                    used_provider = ""
+                    for provider, cfg in events_providers:
+                        if provider != "eastmoney":
+                            logger.info(
+                                f"SignalPack events 未支持 provider={provider}，跳过"
+                            )
+                            continue
+                        try:
+                            from src.collectors.events_collector import EventsCollector
+
+                            collector = EventsCollector.from_database()
+                            items = await collector.fetch_all(
+                                symbols=sorted(symbol_set),
+                                since_days=int(events_days),
+                            )
+
+                            packed: list[dict] = []
+                            for it in items:
+                                packed.append(
+                                    {
+                                        "source": it.source,
+                                        "external_id": it.external_id,
+                                        "event_type": it.event_type,
+                                        "title": it.title,
+                                        "time": it.publish_time.strftime(
+                                            "%Y-%m-%d %H:%M"
+                                        ),
+                                        "importance": it.importance,
+                                        "url": it.url,
+                                        "symbols": it.symbols,
+                                    }
+                                )
+
+                            self._events_cache[events_key] = packed
+                            used_provider = provider
+                            self._events_source_cache[events_key] = used_provider
+                            last_err = None
+                            break
+                        except Exception as e:
+                            last_err = e
+                            continue
+
+                    if events_key not in self._events_cache:
+                        logger.warning(f"SignalPack events 采集失败: {last_err}")
+                        self._events_cache[events_key] = []
+                        self._events_source_cache[events_key] = "unavailable"
+
+            for it in self._events_cache.get(events_key, []):
+                for sym in it.get("symbols") or []:
+                    if sym not in symbol_set:
+                        continue
+                    events_by_symbol.setdefault(sym, []).append(it)
+
+        # 6) Position
         packs: dict[str, SignalPack] = {}
         for sym, market, name in symbols:
             pos_list = []
@@ -357,6 +437,9 @@ class SignalPackBuilder:
             if include_news:
                 if not news_by_symbol.get(sym):
                     missing.append("news")
+            if include_events:
+                if not events_by_symbol.get(sym):
+                    missing.append("events")
             if include_capital_flow and market == MarketCode.CN:
                 flow = flow_map.get(sym) or {}
                 if not flow or flow.get("error"):
@@ -382,6 +465,11 @@ class SignalPackBuilder:
                 capital_flow=flow_map.get(sym)
                 if (include_capital_flow and market == MarketCode.CN)
                 else None,
+                events=EventsSnapshot(
+                    days=int(events_days), items=events_by_symbol.get(sym, [])[:5]
+                )
+                if include_events
+                else None,
                 sources={
                     "quote": self._quote_source_cache.get((market, sym), "unknown"),
                     "kline": self._tech_source_cache.get((market, sym), "unknown")
@@ -392,6 +480,9 @@ class SignalPackBuilder:
                         (MarketCode.CN, sym), "unknown"
                     )
                     if (include_capital_flow and market == MarketCode.CN)
+                    else "skipped",
+                    "events": self._events_source_cache.get(events_key, "unknown")
+                    if include_events
                     else "skipped",
                 },
                 missing=missing,

@@ -68,6 +68,8 @@ class ChartAnalystAgent(BaseAgent):
                     portfolio=context.portfolio,
                     include_technical=True,
                     include_capital_flow=False,
+                    include_events=True,
+                    events_days=3,
                 )
             except Exception as e:
                 logger.warning(f"SignalPack 获取失败（chart_analyst 继续执行）：{e}")

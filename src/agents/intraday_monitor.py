@@ -105,6 +105,8 @@ class IntradayMonitorAgent(BaseAgent):
             portfolio=context.portfolio,
             include_technical=True,
             include_capital_flow=True,
+            include_events=True,
+            events_days=1,
         )
         pack = packs.get(symbol)
 

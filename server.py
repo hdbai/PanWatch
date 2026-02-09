@@ -335,6 +335,17 @@ def seed_data_sources():
             "supports_batch": True,
             "test_symbols": ["601127", "600519", "300750"],
         },
+        # 事件日历数据源（基于公告结构化）
+        {
+            "name": "东方财富事件日历",
+            "type": "events",
+            "provider": "eastmoney",
+            "config": {},
+            "enabled": True,
+            "priority": 0,
+            "supports_batch": True,
+            "test_symbols": ["601127", "600519"],
+        },
         # K线截图数据源
         {
             "name": "雪球K线截图",

@@ -156,6 +156,8 @@ class NewsDigestAgent(BaseAgent):
                 portfolio=context.portfolio,
                 include_technical=True,
                 include_capital_flow=True,
+                include_events=True,
+                events_days=3,
             )
         except Exception as e:
             logger.warning(f"SignalPack 获取失败（news_digest 继续执行）：{e}")
