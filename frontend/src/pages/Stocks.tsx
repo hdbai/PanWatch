@@ -316,6 +316,9 @@ export default function StocksPage() {
   const [scanning, setScanning] = useState(false)
   const [enableAIAnalysis, setEnableAIAnalysis] = useState(true)  // 是否启用 AI 分析建议
 
+  type ViewTab = 'positions' | 'watchlist'
+  const [viewTab, setViewTab] = useLocalStorage<ViewTab>('panwatch_stocks_viewTab', 'positions')
+
   // 股票 AI 建议（来自盘中监控 API）
   const [suggestions] = useState<Record<string, StockSuggestionData>>({})
   const [suggestionsLoading] = useState(false)
@@ -1050,6 +1053,14 @@ export default function StocksPage() {
     return { mv, assets, pct }
   }, [portfolio])
 
+  const positionsCount = useMemo(() => {
+    return (portfolio?.accounts || []).reduce((acc, a) => acc + (a.positions?.length || 0), 0)
+  }, [portfolio])
+
+  const watchlistCount = useMemo(() => {
+    return stocks.filter(s => s.enabled).length
+  }, [stocks])
+
   const toggleAccountExpanded = (id: number) => {
     setExpandedAccounts(prev => {
       const next = new Set(prev)
@@ -1354,6 +1365,32 @@ export default function StocksPage() {
         </div>
       ) : null}
 
+      {/* Tabs: Positions / Watchlist */}
+      <div className="mb-4">
+        <div className="inline-flex items-center gap-1 p-1 rounded-lg bg-accent/30">
+          <button
+            onClick={() => setViewTab('positions')}
+            className={`px-3 py-1.5 rounded-md text-[12px] transition-colors ${
+              viewTab === 'positions'
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            持仓 <span className="ml-1 font-mono text-[11px] opacity-70">{positionsCount}</span>
+          </button>
+          <button
+            onClick={() => setViewTab('watchlist')}
+            className={`px-3 py-1.5 rounded-md text-[12px] transition-colors ${
+              viewTab === 'watchlist'
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            关注 <span className="ml-1 font-mono text-[11px] opacity-70">{watchlistCount}</span>
+          </button>
+        </div>
+      </div>
+
       {/* Add Stock Dialog */}
       <Dialog open={showStockForm} onOpenChange={(open) => { setShowStockForm(open); if (!open) { setSearchQuery(''); setSearchMarket('') } }}>
         <DialogContent className="max-w-lg">
@@ -1448,18 +1485,19 @@ export default function StocksPage() {
       </Dialog>
 
       {/* Accounts & Positions */}
-      {portfolio && portfolio.accounts.length === 0 ? (
-        <div className="card flex flex-col items-center justify-center py-20">
-          <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center mb-4">
-            <Building2 className="w-6 h-6 text-primary" />
+      {viewTab === 'positions' && (
+        portfolio && portfolio.accounts.length === 0 ? (
+          <div className="card flex flex-col items-center justify-center py-20">
+            <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center mb-4">
+              <Building2 className="w-6 h-6 text-primary" />
+            </div>
+            <p className="text-[15px] font-semibold text-foreground">还没有账户</p>
+            <p className="text-[13px] text-muted-foreground mt-1.5">点击"添加账户"创建你的第一个交易账户</p>
           </div>
-          <p className="text-[15px] font-semibold text-foreground">还没有账户</p>
-          <p className="text-[13px] text-muted-foreground mt-1.5">点击"添加账户"创建你的第一个交易账户</p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {portfolio?.accounts.map(account => (
-            <div key={account.id} className="card overflow-hidden">
+        ) : (
+          <div className="space-y-4">
+            {portfolio?.accounts.map(account => (
+              <div key={account.id} className="card overflow-hidden">
               {/* Account Header */}
               <div
                 className="flex flex-col md:flex-row md:items-center justify-between p-3 md:p-4 cursor-pointer hover:bg-accent/30 transition-colors gap-2"
@@ -1750,13 +1788,14 @@ export default function StocksPage() {
             </div>
           ))}
         </div>
+        )
       )}
 
-      {/* Stocks without positions (for agent config) */}
-      {stocks.filter(s => s.enabled).length > 0 && (
-        <div className="mt-6 card p-4">
+      {/* Watchlist */}
+      {viewTab === 'watchlist' && (
+        <div className="card p-4">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-[13px] font-semibold text-foreground">自选股列表</h3>
+            <h3 className="text-[13px] font-semibold text-foreground">关注列表</h3>
             <div className="flex items-center gap-1">
               {[
                 { value: '', label: '全部', count: stocks.filter(s => s.enabled).length },
@@ -1778,85 +1817,121 @@ export default function StocksPage() {
               ))}
             </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {stocks.filter(s => s.enabled && (!stockListFilter || s.market === stockListFilter)).map(stock => {
-              const quote = getStockQuote(stock.symbol)
-              const changeColor = quote?.change_pct != null
-                ? (quote.change_pct > 0 ? 'text-rose-500' : quote.change_pct < 0 ? 'text-emerald-500' : 'text-muted-foreground')
-                : 'text-muted-foreground'
-              return (
-                <div
-                  key={stock.id}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-accent/30 hover:bg-accent/50 transition-colors cursor-pointer"
-                  onClick={() => { setAgentDialogStock(stock);  }}
-                >
-                  <span className={`text-[9px] px-1 py-0.5 rounded ${marketBadge(stock.market).style}`}>
-                    {marketBadge(stock.market).label}
-                  </span>
-                  <span className="font-mono text-[11px] text-muted-foreground">{stock.symbol}</span>
-                  <span className="text-[12px] text-foreground">{stock.name}</span>
-                  {quote ? (
-                    <span className={`font-mono text-[11px] ${changeColor}`}>
-                      {quote.current_price?.toFixed(2)}
-                      {quote.change_pct != null && (
-                        <span className="ml-1">
-                          {quote.change_pct >= 0 ? '+' : ''}{quote.change_pct.toFixed(2)}%
-                        </span>
+          {stocks.filter(s => s.enabled).length === 0 ? (
+            <div className="py-12 text-center">
+              <div className="text-[13px] text-muted-foreground">还没有添加关注股票</div>
+              <div className="mt-2 text-[11px] text-muted-foreground/70">点击右上角“添加股票”开始</div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {stocks.filter(s => s.enabled && (!stockListFilter || s.market === stockListFilter)).map(stock => {
+                const quote = getStockQuote(stock.symbol)
+                const changeColor = quote?.change_pct != null
+                  ? (quote.change_pct > 0 ? 'text-rose-500' : quote.change_pct < 0 ? 'text-emerald-500' : 'text-muted-foreground')
+                  : 'text-muted-foreground'
+                const { suggestion, kline } = getSuggestionForStock(stock.symbol, stock.market, false)
+                return (
+                  <div
+                    key={stock.id}
+                    className="group rounded-xl border border-border/40 bg-background/30 hover:bg-accent/20 transition-colors p-3 cursor-pointer"
+                    onClick={() => { setAgentDialogStock(stock) }}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`text-[9px] px-1 py-0.5 rounded ${marketBadge(stock.market).style}`}>
+                            {marketBadge(stock.market).label}
+                          </span>
+                          <span className="font-mono text-[12px] font-semibold text-foreground">{stock.symbol}</span>
+                          <span className="text-[12px] text-muted-foreground truncate">{stock.name}</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className={`font-mono text-[14px] font-bold leading-tight ${changeColor}`}>
+                          {quote?.current_price != null ? quote.current_price.toFixed(2) : '--'}
+                        </div>
+                        <div className={`font-mono text-[11px] leading-tight ${changeColor}`}>
+                          {quote?.change_pct != null ? `${quote.change_pct >= 0 ? '+' : ''}${quote.change_pct.toFixed(2)}%` : '--'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-2">
+                      {(suggestion || kline) ? (
+                        <SuggestionBadge
+                          suggestion={suggestion}
+                          stockName={stock.name}
+                          stockSymbol={stock.symbol}
+                          kline={kline}
+                          market={stock.market}
+                          hasPosition={false}
+                        />
+                      ) : (
+                        <div className="text-[11px] text-muted-foreground/70 py-2">暂无技术面/AI 分析</div>
                       )}
-                    </span>
-                  ) : (
-                    <span className="text-[10px] text-muted-foreground/50">--</span>
-                  )}
-                  {stock.agents && stock.agents.length > 0 && (
-                    <>
-                      <Badge variant="secondary" className="text-[10px]">{stock.agents.length} Agent</Badge>
-                      {runningAgents[stock.id] && (
-                        <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
-                          <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
-                          {agents.find(a => a.name === runningAgents[stock.id])?.display_name || runningAgents[stock.id]}
-                        </span>
-                      )}
-                    </>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-5 w-5 ml-1"
-                    onClick={(e) => { e.stopPropagation(); openKlineDialog(stock.symbol, stock.market, stock.name, false) }}
-                    title="K线指标"
-                  >
-                    <BarChart3 className="w-3 h-3" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-5 w-5 ml-1"
-                    onClick={(e) => { e.stopPropagation(); openNewsDialog(stock.name) }}
-                    title="相关资讯"
-                  >
-                    <Newspaper className="w-3 h-3" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-5 w-5 ml-1"
-                    onClick={(e) => { e.stopPropagation(); openStockDetail(stock.symbol, stock.market) }}
-                    title="详情"
-                  >
-                    <ExternalLink className="w-3 h-3" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-5 w-5 hover:text-destructive"
-                    onClick={(e) => { e.stopPropagation(); handleDeleteStock(stock.id) }}
-                  >
-                    <X className="w-3 h-3" />
-                  </Button>
-                </div>
-              )
-            })}
-          </div>
+                    </div>
+
+                    <div className="mt-2 pt-2 border-t border-border/30 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {stock.agents && stock.agents.length > 0 ? (
+                          <Badge variant="secondary" className="text-[10px]">{stock.agents.length} Agent</Badge>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground/60">未配置 Agent</span>
+                        )}
+                        {runningAgents[stock.id] && (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-amber-600">
+                            <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
+                            {agents.find(a => a.name === runningAgents[stock.id])?.display_name || runningAgents[stock.id]}
+                          </span>
+                        )}
+                      </div>
+                      <div
+                        className="flex items-center gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => openKlineDialog(stock.symbol, stock.market, stock.name, false)}
+                          title="K线指标"
+                        >
+                          <BarChart3 className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => openNewsDialog(stock.name)}
+                          title="相关资讯"
+                        >
+                          <Newspaper className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => openStockDetail(stock.symbol, stock.market)}
+                          title="详情"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 hover:text-destructive"
+                          onClick={() => handleDeleteStock(stock.id)}
+                          title="移除关注"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
 

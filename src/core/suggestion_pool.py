@@ -1,7 +1,9 @@
 """建议池管理 - 汇总各 Agent 建议"""
+
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
+from datetime import timezone
 
 from src.web.database import SessionLocal
 from src.web.models import StockSuggestion
@@ -9,12 +11,27 @@ from src.core.timezone import utc_now, to_iso_with_tz
 
 logger = logging.getLogger(__name__)
 
+
+def _norm_text(s: str) -> str:
+    return " ".join((s or "").strip().split())
+
+
+def _dedupe_window_minutes(agent_name: str) -> int:
+    # Default: keep the suggestion list stable and avoid repeated rows.
+    # Intraday runs frequently; other agents run a few times a day.
+    if agent_name == "intraday_monitor":
+        return 30
+    if agent_name == "news_digest":
+        return 60
+    return 180
+
+
 # Agent 有效期配置（小时）
 AGENT_EXPIRY_HOURS = {
-    "premarket_outlook": 12,    # 盘前建议当日有效（约12小时）
-    "intraday_monitor": 4,      # 盘中建议4小时有效
-    "daily_report": 16,         # 盘后建议隔夜有效（到次日开盘，约16小时）
-    "news_digest": 12,          # 新闻速递建议半天有效
+    "premarket_outlook": 12,  # 盘前建议当日有效（约12小时）
+    "intraday_monitor": 4,  # 盘中建议4小时有效
+    "daily_report": 16,  # 盘后建议隔夜有效（到次日开盘，约16小时）
+    "news_digest": 12,  # 新闻速递建议半天有效
 }
 
 # Agent 中文名称映射
@@ -71,6 +88,46 @@ def save_suggestion(
         if not agent_label:
             agent_label = AGENT_LABELS.get(agent_name, agent_name)
 
+        # Dedupe: if the latest suggestion from the same agent is essentially the same,
+        # do not create a new row. This prevents "AI 建议反复" in the UI.
+        try:
+            latest = (
+                db.query(StockSuggestion)
+                .filter(
+                    StockSuggestion.stock_symbol == stock_symbol,
+                    StockSuggestion.agent_name == agent_name,
+                )
+                .order_by(StockSuggestion.created_at.desc(), StockSuggestion.id.desc())
+                .first()
+            )
+
+            if latest and latest.created_at:
+                latest_created = latest.created_at
+                if latest_created.tzinfo is None:
+                    latest_created = latest_created.replace(tzinfo=timezone.utc)
+
+                window = timedelta(minutes=_dedupe_window_minutes(agent_name))
+                same_key = (
+                    _norm_text(latest.action) == _norm_text(action)
+                    and _norm_text(latest.action_label) == _norm_text(action_label)
+                    and _norm_text(latest.signal or "") == _norm_text(signal)
+                )
+
+                if same_key and (now - latest_created) <= window:
+                    # Extend expiry (keep the first message to avoid churn).
+                    if not latest.expires_at or latest.expires_at < expires_at:
+                        latest.expires_at = expires_at
+                    if not (latest.stock_name or "") and stock_name:
+                        latest.stock_name = stock_name
+                    db.commit()
+                    logger.info(
+                        f"建议去重: {stock_symbol} {action_label} (来源: {agent_label})"
+                    )
+                    return True
+        except Exception:
+            # Best-effort only; never block saving.
+            db.rollback()
+
         # 创建新建议
         suggestion = StockSuggestion(
             stock_symbol=stock_symbol,
@@ -124,13 +181,13 @@ def get_suggestions_for_stock(
         now = utc_now()
         if not include_expired:
             query = query.filter(
-                (StockSuggestion.expires_at == None) |
-                (StockSuggestion.expires_at > now)
+                (StockSuggestion.expires_at == None)
+                | (StockSuggestion.expires_at > now)
             )
 
-        suggestions = query.order_by(
-            StockSuggestion.created_at.desc()
-        ).limit(limit).all()
+        suggestions = (
+            query.order_by(StockSuggestion.created_at.desc()).limit(limit).all()
+        )
 
         return [_to_dict(s, now) for s in suggestions]
 
@@ -158,15 +215,19 @@ def get_latest_suggestions(
         from sqlalchemy import func
 
         # 先获取每只股票最新建议的 ID
-        subquery = db.query(
-            StockSuggestion.stock_symbol,
-            func.max(StockSuggestion.id).label('max_id')
-        ).group_by(StockSuggestion.stock_symbol).subquery()
+        subquery = (
+            db.query(
+                StockSuggestion.stock_symbol,
+                func.max(StockSuggestion.id).label("max_id"),
+            )
+            .group_by(StockSuggestion.stock_symbol)
+            .subquery()
+        )
 
         query = db.query(StockSuggestion).join(
             subquery,
-            (StockSuggestion.stock_symbol == subquery.c.stock_symbol) &
-            (StockSuggestion.id == subquery.c.max_id)
+            (StockSuggestion.stock_symbol == subquery.c.stock_symbol)
+            & (StockSuggestion.id == subquery.c.max_id),
         )
 
         if stock_symbols:
@@ -175,8 +236,8 @@ def get_latest_suggestions(
         now = utc_now()
         if not include_expired:
             query = query.filter(
-                (StockSuggestion.expires_at == None) |
-                (StockSuggestion.expires_at > now)
+                (StockSuggestion.expires_at == None)
+                | (StockSuggestion.expires_at > now)
             )
 
         suggestions = query.all()
@@ -198,6 +259,7 @@ def _to_dict(suggestion: StockSuggestion, now: Optional[datetime] = None) -> dic
         expires_utc = suggestion.expires_at
         if expires_utc.tzinfo is None:
             from src.core.timezone import timezone
+
             expires_utc = expires_utc.replace(tzinfo=timezone.utc)
         is_expired = expires_utc < now
 
@@ -207,6 +269,7 @@ def _to_dict(suggestion: StockSuggestion, now: Optional[datetime] = None) -> dic
         created_at = suggestion.created_at
         if created_at.tzinfo is None:
             from src.core.timezone import timezone
+
             created_at = created_at.replace(tzinfo=timezone.utc)
         created_at_str = to_iso_with_tz(created_at)
 
@@ -215,6 +278,7 @@ def _to_dict(suggestion: StockSuggestion, now: Optional[datetime] = None) -> dic
         expires_at = suggestion.expires_at
         if expires_at.tzinfo is None:
             from src.core.timezone import timezone
+
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         expires_at_str = to_iso_with_tz(expires_at)
 
@@ -249,9 +313,11 @@ def cleanup_expired_suggestions(days: int = 7) -> int:
     db = SessionLocal()
     try:
         cutoff = utc_now() - timedelta(days=days)
-        result = db.query(StockSuggestion).filter(
-            StockSuggestion.created_at < cutoff
-        ).delete()
+        result = (
+            db.query(StockSuggestion)
+            .filter(StockSuggestion.created_at < cutoff)
+            .delete()
+        )
         db.commit()
         logger.info(f"清理了 {result} 条过期建议")
         return result

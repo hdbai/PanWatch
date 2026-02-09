@@ -184,6 +184,7 @@ export function SuggestionBadge({
     const aiLabel = normalized ? (actionLabels[normalized] || suggestion.action_label) : (suggestion.action_label || '观望')
     const tech = kline ? buildKlineSuggestion(kline as any, hasPosition) : null
     const techColor = tech ? (actionColors[tech.action] || 'bg-slate-500 text-white') : 'bg-slate-500 text-white'
+    const timeStr = formatSuggestionTime(suggestion.created_at)
     return (
       <>
         <div className="pt-3 border-t border-border/30">
@@ -224,6 +225,14 @@ export function SuggestionBadge({
               ) : suggestion.raw && !suggestion.signal ? (
                 <p className="text-[11px] text-muted-foreground">{suggestion.raw}</p>
               ) : null}
+
+              {(suggestion.agent_label || timeStr) && (
+                <div className="mt-1 text-[10px] text-muted-foreground/70">
+                  来源: {suggestion.agent_label || (isAI ? 'AI' : '未知')}
+                  {timeStr && ` · ${timeStr}`}
+                  {suggestion.is_expired && <span className="ml-1 text-amber-600">(已过期)</span>}
+                </div>
+              )}
             </div>
           </div>
         </div>
