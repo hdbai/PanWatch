@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Check, Eye, EyeOff, Plus, Pencil, Trash2, Star, Send, Cpu, Play, Download, Upload, FileJson, BarChart3 } from 'lucide-react'
+import { Check, Eye, EyeOff, Plus, Pencil, Trash2, Star, Send, Cpu, Play, Download, Upload, FileJson, BarChart3, TrendingUp } from 'lucide-react'
 import { fetchAPI, type AIService, type AIModel, type NotifyChannel } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -31,6 +31,14 @@ interface FeedbackStats {
   useful_rate: number
   by_day: Array<{ day: string; total: number; useful: number; useless: number; useful_rate: number }>
   by_agent: Array<{ agent_name: string; total: number; useful: number; useless: number; useful_rate: number }>
+}
+
+interface AgentsHealth {
+  timezone: string
+  summary: {
+    next_24h_count: number
+    recent_failed_count: number
+  }
 }
 
 interface ServiceForm {
@@ -135,9 +143,12 @@ export default function SettingsPage() {
   const [channels, setChannels] = useState<NotifyChannel[]>([])
   const [version, setVersion] = useState<string>('')
   const [loading, setLoading] = useState(true)
+  const [health, setHealth] = useState<AgentsHealth | null>(null)
   const [saving, setSaving] = useState<string | null>(null)
   const [saved, setSaved] = useState<string | null>(null)
   const [edited, setEdited] = useState<Record<string, string>>({})
+
+  const [systemQuery, setSystemQuery] = useState('')
 
   // Service dialog
   const [serviceDialogOpen, setServiceDialogOpen] = useState(false)
@@ -228,16 +239,18 @@ export default function SettingsPage() {
 
   const load = async () => {
     try {
-      const [settingsData, servicesData, channelsData, versionData] = await Promise.all([
+      const [settingsData, servicesData, channelsData, versionData, healthData] = await Promise.all([
         fetchAPI<Setting[]>('/settings'),
         fetchAPI<AIService[]>('/providers/services'),
         fetchAPI<NotifyChannel[]>('/channels'),
         fetchAPI<{ version: string }>('/settings/version'),
+        fetchAPI<AgentsHealth>('/agents/health'),
       ])
       setSettings(settingsData)
       setServices(servicesData)
       setChannels(channelsData)
       setVersion(versionData.version)
+      setHealth(healthData)
     } catch (e) {
       console.error(e)
     } finally {
@@ -516,18 +529,113 @@ export default function SettingsPage() {
     )
   }
 
+  const allModels = services.flatMap(s => s.models || [])
+  const defaultModel = allModels.find(m => m.is_default)
+  const defaultChannel = channels.find(c => c.is_default)
+  const enabledChannels = channels.filter(c => c.enabled)
+
+  const filteredSettings = settings.filter(s => {
+    const q = systemQuery.trim().toLowerCase()
+    if (!q) return true
+    return (s.description || '').toLowerCase().includes(q) || (s.key || '').toLowerCase().includes(q)
+  })
+
+  // 按“重要性”排序：常用优先，低频靠后
+  const jumpItems: Array<{ id: string; label: string; hint?: string }> = [
+    { id: 'sec-ai', label: 'AI', hint: `${services.length} 服务 / ${allModels.length} 模型` },
+    { id: 'sec-notify', label: '通知', hint: `${enabledChannels.length}/${channels.length} 启用` },
+    { id: 'sec-system', label: '系统', hint: health?.timezone ? `TZ ${health.timezone}` : undefined },
+    { id: 'sec-pack', label: '配置包' },
+    { id: 'sec-feedback', label: '反馈' },
+  ]
+
+  const scrollTo = (id: string) => {
+    const el = document.getElementById(id)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   return (
     <div>
-      <div className="mb-4 md:mb-8">
-        <h1 className="text-[20px] md:text-[22px] font-bold text-foreground tracking-tight">设置</h1>
-        <p className="text-[12px] md:text-[13px] text-muted-foreground mt-0.5 md:mt-1">AI 服务商、模型、通知渠道与系统配置</p>
+      {/* Hero */}
+      <div className="card relative overflow-hidden p-5 md:p-7">
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-accent/30" />
+        <div className="relative flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <div className="h-8 w-8 rounded-2xl bg-gradient-to-br from-primary to-primary/70 text-white shadow-sm flex items-center justify-center">
+                <TrendingUp className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-foreground/90">PanWatch</span>
+                  <span className="rounded-full border border-border/50 bg-background/70 px-2 py-0.5 text-[10px] text-muted-foreground">Console</span>
+                </div>
+              </div>
+              {version ? <span className="opacity-60">v{version}</span> : null}
+              {health?.timezone ? (
+                <span className="opacity-60">TZ {health.timezone}</span>
+              ) : null}
+            </div>
+            <h1 className="mt-1 text-[22px] md:text-[26px] font-bold text-foreground tracking-tight">设置</h1>
+            <p className="mt-1 text-[12px] md:text-[13px] text-muted-foreground">AI、通知与系统偏好。把“信息密度”和“打扰”调到你的手感。</p>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+                <span className="font-mono text-foreground/90">{services.length}</span> 服务商
+              </div>
+              <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+                <span className="font-mono text-foreground/90">{allModels.length}</span> 模型
+              </div>
+              <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+                <span className="font-mono text-foreground/90">{enabledChannels.length}</span>/<span className="font-mono">{channels.length}</span> 渠道启用
+              </div>
+              {defaultModel ? (
+                <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+                  默认模型 <span className="font-mono text-foreground/90">{defaultModel.model}</span>
+                </div>
+              ) : null}
+              {defaultChannel ? (
+                <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+                  默认通知 <span className="text-foreground/90">{defaultChannel.name}</span>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-2">
+            <Button variant="secondary" size="sm" className="h-9" onClick={exportTemplate} disabled={exporting}>
+              <Download className="w-3.5 h-3.5" /> 导出配置包
+            </Button>
+            <Button size="sm" className="h-9" onClick={() => scrollTo('sec-ai')}>
+              <Cpu className="w-3.5 h-3.5" /> 配置 AI
+            </Button>
+          </div>
+        </div>
+
+        {/* Jump pills */}
+        <div className="relative mt-4 flex flex-wrap gap-2">
+          {jumpItems.map(it => (
+            <button
+              key={it.id}
+              onClick={() => scrollTo(it.id)}
+              className="group flex items-center gap-2 rounded-full border border-border/50 bg-background/70 px-3 py-1.5 text-[11px] text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors"
+            >
+              <span className="font-medium text-foreground/90 group-hover:text-foreground">{it.label}</span>
+              {it.hint ? <span className="opacity-60">{it.hint}</span> : null}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="space-y-6">
+      <div className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* AI Services + Models Section */}
-        <section className="card p-4 md:p-6">
-          <div className="flex items-center justify-between mb-4 md:mb-5">
-            <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">AI 服务商 & 模型</h3>
+        <section id="sec-ai" className="card p-4 md:p-6 lg:col-span-7">
+          <div className="flex items-start justify-between mb-4 md:mb-5 gap-3">
+            <div>
+              <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">AI 服务商 & 模型</h3>
+              <p className="text-[11px] text-muted-foreground mt-1">连接你的 AI 服务并设置默认模型</p>
+            </div>
             <Button size="sm" className="h-8" onClick={() => openServiceDialog()}>
               <Plus className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">添加服务商</span>
@@ -604,9 +712,12 @@ export default function SettingsPage() {
         </section>
 
         {/* Notify Channel Section */}
-        <section className="card p-4 md:p-6">
-          <div className="flex items-center justify-between mb-4 md:mb-5">
-            <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">通知渠道</h3>
+        <section id="sec-notify" className="card p-4 md:p-6 lg:col-span-5">
+          <div className="flex items-start justify-between mb-4 md:mb-5 gap-3">
+            <div>
+              <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">通知渠道</h3>
+              <p className="text-[11px] text-muted-foreground mt-1">推送到 Telegram/Bark 等渠道</p>
+            </div>
             <Button size="sm" className="h-8" onClick={() => openChannelDialog()}>
               <Plus className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">添加</span>
@@ -657,9 +768,71 @@ export default function SettingsPage() {
           )}
         </section>
 
+        {/* General Settings */}
+        {settings.length > 0 && (
+          <section id="sec-system" className="card p-4 md:p-6 lg:col-span-12">
+            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-4 md:mb-5">
+              <div>
+                <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">系统</h3>
+                <p className="text-[11px] text-muted-foreground mt-1">偏好与高级选项。修改后立即生效。</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={systemQuery}
+                  onChange={e => setSystemQuery(e.target.value)}
+                  placeholder="搜索设置项（描述 / key）"
+                  className="h-9 w-full md:w-[320px]"
+                />
+                {health?.timezone ? (
+                  <div className="hidden md:flex px-2.5 h-9 items-center rounded-lg border border-border/50 bg-accent/20 text-[11px] text-muted-foreground">
+                    TZ <span className="ml-1 font-mono text-foreground/90">{health.timezone}</span>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="space-y-5">
+              {filteredSettings.map(setting => {
+                const currentValue = edited[setting.key] ?? setting.value
+                const isChanged = setting.key in edited
+                return (
+                  <div key={setting.key}>
+                    <Label>{setting.description || setting.key}</Label>
+                    <div className="flex items-center gap-2.5">
+                      <Input
+                        value={currentValue}
+                        onChange={e => setEdited({ ...edited, [setting.key]: e.target.value })}
+                        className={`font-mono ${isChanged ? 'ring-2 ring-primary/20 border-primary/30' : ''}`}
+                        placeholder={setting.key}
+                      />
+                      <button
+                        onClick={() => handleSave(setting.key)}
+                        disabled={!isChanged || saving === setting.key}
+                        className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
+                          saved === setting.key
+                            ? 'bg-emerald-500/10 text-emerald-600'
+                            : isChanged
+                              ? 'bg-primary text-white'
+                              : 'text-muted-foreground/30'
+                        }`}
+                      >
+                        {saving === setting.key ? (
+                          <span className="w-4 h-4 border-2 border-current/30 border-t-current rounded-full animate-spin" />
+                        ) : (
+                          <Check className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )}
+
         {/* Config Pack (Templates) */}
-        <section className="card p-4 md:p-6">
-          <div className="flex items-center justify-between mb-4">
+        <section id="sec-pack" className="card p-4 md:p-6 lg:col-span-7">
+          <div className="flex items-start justify-between mb-4 gap-3">
             <div>
               <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">配置包</h3>
               <p className="text-[11px] text-muted-foreground mt-1">一键导入/导出 Agent、关注列表与系统设置</p>
@@ -741,7 +914,7 @@ export default function SettingsPage() {
         </section>
 
         {/* Feedback Stats */}
-        <section className="card p-4 md:p-6">
+        <section id="sec-feedback" className="card p-4 md:p-6 lg:col-span-5">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground">建议反馈</h3>
@@ -790,48 +963,6 @@ export default function SettingsPage() {
           )}
         </section>
 
-        {/* General Settings */}
-        {settings.length > 0 && (
-          <section className="card p-4 md:p-6">
-            <h3 className="text-[12px] md:text-[13px] font-semibold text-foreground mb-4 md:mb-5">系统</h3>
-            <div className="space-y-5">
-              {settings.map(setting => {
-                const currentValue = edited[setting.key] ?? setting.value
-                const isChanged = setting.key in edited
-                return (
-                  <div key={setting.key}>
-                    <Label>{setting.description || setting.key}</Label>
-                    <div className="flex items-center gap-2.5">
-                      <Input
-                        value={currentValue}
-                        onChange={e => setEdited({ ...edited, [setting.key]: e.target.value })}
-                        className={`font-mono ${isChanged ? 'ring-2 ring-primary/20 border-primary/30' : ''}`}
-                        placeholder={setting.key}
-                      />
-                      <button
-                        onClick={() => handleSave(setting.key)}
-                        disabled={!isChanged || saving === setting.key}
-                        className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
-                          saved === setting.key
-                            ? 'bg-emerald-500/10 text-emerald-600'
-                            : isChanged
-                              ? 'bg-primary text-white'
-                              : 'text-muted-foreground/30'
-                        }`}
-                      >
-                        {saving === setting.key ? (
-                          <span className="w-4 h-4 border-2 border-current/30 border-t-current rounded-full animate-spin" />
-                        ) : (
-                          <Check className="w-4 h-4" />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </section>
-        )}
       </div>
 
       {/* Service Dialog */}

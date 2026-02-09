@@ -10,9 +10,9 @@ import AgentsPage from '@/pages/Agents'
 import SettingsPage from '@/pages/Settings'
 import DataSourcesPage from '@/pages/DataSources'
 import HistoryPage from '@/pages/History'
-import NewsPage from '@/pages/News'
 import LoginPage from '@/pages/Login'
 import LogsModal from '@/components/logs-modal'
+import AmbientBackground from '@/components/AmbientBackground'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -80,14 +80,15 @@ function App() {
 
   return (
     <RequireAuth>
-    <div className="min-h-screen pb-16 md:pb-0">
+    <div className="min-h-screen pb-16 md:pb-0 relative overflow-x-hidden bg-background">
+      <AmbientBackground />
       {/* Desktop Floating Nav */}
       <div className="sticky top-0 z-50 px-4 md:px-6 pt-3 md:pt-4 pb-2 hidden md:block">
         <header className="card px-4 md:px-5">
           <div className="h-14 flex items-center justify-between">
             {/* Logo */}
             <NavLink to="/" className="flex items-center gap-2.5 group">
-              <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center">
+              <div className="w-8 h-8 rounded-2xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm">
                 <TrendingUp className="w-4 h-4 text-white" />
               </div>
               <span className="text-[15px] font-bold text-foreground">PanWatch</span>
@@ -102,14 +103,23 @@ function App() {
                   <NavLink
                     key={to}
                     to={to}
-                    className={`px-3.5 py-2 rounded-xl text-[13px] font-medium transition-all ${
-                      isActive
-                        ? 'bg-primary/8 text-primary'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-accent'
-                    }`}
+                    className="relative"
                   >
-                    <span className="flex items-center gap-1.5">
-                      <Icon className="w-4 h-4" />
+                    <span
+                      className={`absolute inset-0 rounded-xl transition-all ${
+                        isActive
+                          ? 'bg-[linear-gradient(135deg,hsl(var(--primary)/0.14),hsl(var(--primary)/0.04),hsl(var(--success)/0.06))] ring-1 ring-primary/20 shadow-[0_8px_24px_-18px_hsl(var(--primary)/0.55)]'
+                          : 'bg-transparent'
+                      }`}
+                    />
+                    <span
+                      className={`relative px-3.5 py-2 rounded-xl text-[13px] font-medium transition-all flex items-center gap-1.5 ${
+                        isActive
+                          ? 'text-foreground'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                      }`}
+                    >
+                      <Icon className={`w-4 h-4 ${isActive ? 'text-primary' : ''}`} />
                       {label}
                     </span>
                   </NavLink>
@@ -118,17 +128,17 @@ function App() {
             </nav>
 
             {/* Theme Toggle & Logout */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5 px-1.5 py-1 rounded-2xl bg-accent/20 border border-border/40">
               <button
                 onClick={() => setLogsOpen(true)}
-                className="w-9 h-9 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-all"
+                className="w-9 h-9 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/70 transition-all"
                 title="查看日志"
               >
                 <ScrollText className="w-4 h-4" />
               </button>
               <button
                 onClick={toggleTheme}
-                className="w-9 h-9 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-all"
+                className="w-9 h-9 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/70 transition-all"
                 title={theme === 'dark' ? '切换到亮色' : '切换到暗色'}
               >
                 {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
@@ -152,25 +162,28 @@ function App() {
         <header className="card px-4">
           <div className="h-12 flex items-center justify-between">
             <NavLink to="/" className="flex items-center gap-2 group">
-              <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
+              <div className="w-7 h-7 rounded-xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm">
                 <TrendingUp className="w-3.5 h-3.5 text-white" />
               </div>
               <span className="text-[14px] font-bold text-foreground">PanWatch</span>
               {version && <span className="text-[10px] text-muted-foreground/60 font-normal">v{version}</span>}
             </NavLink>
-            <button
-              onClick={() => setLogsOpen(true)}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-all"
-              title="查看日志"
-            >
-              <ScrollText className="w-4 h-4" />
-            </button>
-            <button
-              onClick={toggleTheme}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-all"
-            >
-              {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-            </button>
+            <div className="flex items-center gap-1.5 px-1.5 py-1 rounded-2xl bg-accent/20 border border-border/40">
+              <button
+                onClick={() => setLogsOpen(true)}
+                className="w-8 h-8 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/70 transition-all"
+                title="查看日志"
+              >
+                <ScrollText className="w-4 h-4" />
+              </button>
+              <button
+                onClick={toggleTheme}
+                className="w-8 h-8 rounded-xl flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-background/70 transition-all"
+                title={theme === 'dark' ? '切换到亮色' : '切换到暗色'}
+              >
+                {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              </button>
+            </div>
           </div>
         </header>
       </div>
@@ -184,10 +197,10 @@ function App() {
               <NavLink
                 key={to}
                 to={to}
-                className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-lg transition-colors min-w-[48px] ${
+                className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded-xl transition-all min-w-[56px] ${
                   isActive
-                    ? 'text-primary'
-                    : 'text-muted-foreground'
+                    ? 'text-primary bg-primary/8 ring-1 ring-primary/15'
+                    : 'text-muted-foreground hover:bg-accent/30'
                 }`}
               >
                 <Icon className="w-5 h-5" />
@@ -199,13 +212,12 @@ function App() {
       </nav>
 
       {/* Content */}
-      <main className="px-4 md:px-6 py-4 md:py-6">
+      <main className="px-4 md:px-6 py-4 md:py-6 w-full">
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/portfolio" element={<StocksPage />} />
           <Route path="/stock/:market/:symbol" element={<StockDetailPage />} />
           <Route path="/agents" element={<AgentsPage />} />
-          <Route path="/news" element={<NewsPage />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/datasources" element={<DataSourcesPage />} />
           <Route path="/settings" element={<SettingsPage />} />

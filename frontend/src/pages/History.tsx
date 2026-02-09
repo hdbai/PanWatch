@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Clock, Trash2, ChevronDown, ChevronRight, FileText } from 'lucide-react'
+import { Clock, Trash2, FileText, ArrowLeft } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import { fetchAPI } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -32,7 +32,8 @@ export default function HistoryPage() {
   const [records, setRecords] = useState<HistoryRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedAgent, setSelectedAgent] = useState<string>('all')
-  const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [mobileView, setMobileView] = useState<'list' | 'reader'>('list')
   const [detailRecord, setDetailRecord] = useState<HistoryRecord | null>(null)
 
   const load = async () => {
@@ -51,6 +52,16 @@ export default function HistoryPage() {
   }
 
   useEffect(() => { load() }, [selectedAgent])
+
+  useEffect(() => {
+    if (!records.length) {
+      setSelectedId(null)
+      setMobileView('list')
+      return
+    }
+    if (selectedId && records.some(r => r.id === selectedId)) return
+    setSelectedId(records[0].id)
+  }, [records, selectedId])
 
   const deleteRecord = async (id: number) => {
     if (!confirm('确定删除这条记录吗？')) return
@@ -72,32 +83,37 @@ export default function HistoryPage() {
     return `${record.analysis_date} ${agentLabel}`
   }
 
-  // 按日期分组
-  const groupedByDate = records.reduce((acc, r) => {
-    const date = r.analysis_date
-    if (!acc[date]) acc[date] = []
-    acc[date].push(r)
-    return acc
-  }, {} as Record<string, HistoryRecord[]>)
+  const selectedRecord = selectedId ? records.find(r => r.id === selectedId) || null : null
 
-  const sortedDates = Object.keys(groupedByDate).sort((a, b) => b.localeCompare(a))
+  const selectRecord = (id: number) => {
+    setSelectedId(id)
+    // On mobile, jump to reader view for a smoother experience
+    setMobileView('reader')
+    try {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    } catch {
+      // ignore
+    }
+  }
 
   return (
     <div className="w-full space-y-4 md:space-y-6">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 md:gap-3">
-          <div className="w-9 h-9 md:w-10 md:h-10 rounded-lg md:rounded-xl bg-amber-500 flex items-center justify-center">
+          <div className="w-9 h-9 md:w-10 md:h-10 rounded-xl bg-gradient-to-br from-amber-500 to-amber-500/70 flex items-center justify-center shadow-sm">
             <Clock className="w-4 h-4 md:w-5 md:h-5 text-white" />
           </div>
           <div>
             <h1 className="text-lg md:text-xl font-bold">分析历史</h1>
-            <p className="text-[12px] md:text-[13px] text-muted-foreground">查看 AI 分析记录</p>
+            <p className="text-[12px] md:text-[13px] text-muted-foreground">报告式阅读：目录 + 正文</p>
+          </div>
+          <div className="hidden md:flex px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+            共 <span className="font-mono text-foreground/90">{records.length}</span> 条
           </div>
         </div>
 
         <Select value={selectedAgent} onValueChange={setSelectedAgent}>
-          <SelectTrigger className="w-full sm:w-[160px] h-9">
+          <SelectTrigger className="w-full sm:w-[180px] h-9">
             <SelectValue placeholder="全部 Agent" />
           </SelectTrigger>
           <SelectContent>
@@ -109,7 +125,6 @@ export default function HistoryPage() {
         </Select>
       </div>
 
-      {/* Records */}
       {loading ? (
         <div className="card p-12 text-center">
           <div className="w-6 h-6 border-2 border-primary/30 border-t-primary rounded-full animate-spin mx-auto" />
@@ -120,69 +135,101 @@ export default function HistoryPage() {
           <p className="text-muted-foreground">暂无分析记录</p>
         </div>
       ) : (
-        <div className="space-y-4">
-          {sortedDates.map(date => (
-            <div key={date} className="card overflow-hidden">
-              <div className="px-4 py-2.5 bg-accent/30 border-b border-border/50">
-                <span className="text-[13px] font-medium">{date}</span>
-                <span className="text-[12px] text-muted-foreground ml-2">
-                  {groupedByDate[date].length} 条记录
-                </span>
-              </div>
-              <div className="divide-y divide-border/50">
-                {groupedByDate[date].map(record => {
-                  const isExpanded = expandedId === record.id
-                  return (
-                    <div key={record.id} className="group">
-                      <div
-                        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-accent/30 transition-colors"
-                        onClick={() => setExpandedId(isExpanded ? null : record.id)}
-                      >
-                        {isExpanded ? (
-                          <ChevronDown className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                        ) : (
-                          <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                        )}
-                        <Badge variant="outline" className="text-[10px] flex-shrink-0">
-                          {AGENT_LABELS[record.agent_name] || record.agent_name}
-                        </Badge>
-                        <span className="text-[13px] truncate flex-1">
-                          {record.title || '分析报告'}
-                        </span>
-                        <span className="text-[11px] text-muted-foreground flex-shrink-0">
-                          {new Date(record.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="opacity-0 group-hover:opacity-100 transition-opacity h-7 w-7 p-0"
-                          onClick={e => { e.stopPropagation(); deleteRecord(record.id) }}
-                        >
-                          <Trash2 className="w-3.5 h-3.5 text-muted-foreground" />
-                        </Button>
-                      </div>
-                      {isExpanded && (
-                        <div className="px-4 pb-4 pl-11">
-                          <div className="p-4 bg-accent/20 rounded-lg prose prose-sm dark:prose-invert max-w-none max-h-[400px] overflow-y-auto">
-                            <ReactMarkdown>{record.content}</ReactMarkdown>
-                          </div>
-                          <div className="mt-2 flex justify-end">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setDetailRecord(record)}
-                            >
-                              查看详情
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+          {/* Mobile view switch */}
+          <div className="md:hidden card p-2">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setMobileView('list')}
+                className={`h-9 rounded-lg text-[12px] font-medium transition-colors ${mobileView === 'list' ? 'bg-primary text-white' : 'bg-accent/30 text-muted-foreground hover:bg-accent/50'}`}
+              >
+                目录
+              </button>
+              <button
+                onClick={() => setMobileView('reader')}
+                className={`h-9 rounded-lg text-[12px] font-medium transition-colors ${mobileView === 'reader' ? 'bg-primary text-white' : 'bg-accent/30 text-muted-foreground hover:bg-accent/50'}`}
+                disabled={!selectedRecord}
+              >
+                正文
+              </button>
             </div>
-          ))}
+          </div>
+
+          {/* List */}
+          <div className={`md:col-span-5 card overflow-hidden ${mobileView === 'reader' ? 'hidden md:block' : ''}`}>
+            <div className="px-4 py-3 bg-accent/20 border-b border-border/50 text-[12px] text-muted-foreground">
+              目录（点击查看）
+            </div>
+            <div className="max-h-[70vh] md:max-h-[70vh] overflow-y-auto scrollbar divide-y divide-border/50">
+              {records.map(r => {
+                const active = selectedId === r.id
+                return (
+                  <button
+                    key={r.id}
+                    onClick={() => selectRecord(r.id)}
+                    className={`w-full text-left px-4 py-3 transition-colors ${active ? 'bg-primary/8' : 'hover:bg-accent/30'}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="text-[10px] flex-shrink-0">
+                        {AGENT_LABELS[r.agent_name] || r.agent_name}
+                      </Badge>
+                      <span className={`text-[13px] font-medium truncate ${active ? 'text-foreground' : 'text-foreground/90'}`}>{r.title || '分析报告'}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                      <span className="font-mono">{r.analysis_date}</span>
+                      <span>{new Date(r.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Reader */}
+          <div className={`md:col-span-7 card p-4 md:p-6 ${mobileView === 'list' ? 'hidden md:block' : ''}`}>
+            {selectedRecord ? (
+              <div>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="md:hidden h-8 px-2 -ml-2"
+                        onClick={() => setMobileView('list')}
+                      >
+                        <ArrowLeft className="w-4 h-4" />
+                        目录
+                      </Button>
+                      <Badge variant="outline" className="text-[10px]">{AGENT_LABELS[selectedRecord.agent_name] || selectedRecord.agent_name}</Badge>
+                      <span className="text-[11px] text-muted-foreground font-mono">{selectedRecord.created_at}</span>
+                    </div>
+                    <div className="mt-1 text-[15px] md:text-[16px] font-semibold text-foreground truncate">
+                      {formatTitle(selectedRecord)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <Button variant="outline" size="sm" onClick={() => setDetailRecord(selectedRecord)}>查看详情</Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 hover:text-destructive"
+                      onClick={() => deleteRecord(selectedRecord.id)}
+                      title="删除"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="mt-4 p-4 bg-accent/20 rounded-xl prose prose-sm dark:prose-invert max-w-none max-h-[62vh] md:max-h-[62vh] overflow-y-auto scrollbar">
+                  <ReactMarkdown>{selectedRecord.content}</ReactMarkdown>
+                </div>
+              </div>
+            ) : (
+              <div className="text-[13px] text-muted-foreground">请选择一条记录</div>
+            )}
+          </div>
         </div>
       )}
 

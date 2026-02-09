@@ -563,77 +563,79 @@ export default function DashboardPage() {
       {/* Risk dialog removed (was too noisy when empty) */}
 
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-6">
-        <div>
-          <h1 className="text-[20px] md:text-[22px] font-bold text-foreground tracking-tight">Dashboard</h1>
-          <div className="flex items-center gap-2 md:gap-3 mt-1.5 flex-wrap">
-            {marketStatus.map(m => {
-              const statusColors: Record<string, string> = {
-                trading: 'bg-emerald-500',
-                pre_market: 'bg-amber-500',
-                break: 'bg-amber-500',
-                after_hours: 'bg-slate-400',
-                closed: 'bg-slate-400',
-              }
-              return (
-                <div
-                  key={m.code}
-                  className="flex items-center gap-1"
-                  title={`${m.sessions.join(', ')} (${m.local_time})`}
-                >
-                  <span className={`w-1.5 h-1.5 rounded-full ${statusColors[m.status] || 'bg-slate-400'}`} />
-                  <span className="text-[11px] md:text-[12px] text-muted-foreground">{m.name}</span>
-                  <span className={`text-[10px] md:text-[11px] ${m.is_trading ? 'text-emerald-600' : 'text-muted-foreground/60'}`}>
-                    {m.status_text}
-                  </span>
-                </div>
-              )
-            })}
+      <div className="mb-5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-center gap-2 md:gap-3">
+            <div>
+              <h1 className="text-[18px] md:text-[20px] font-bold text-foreground tracking-tight">Dashboard</h1>
+            </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Auto Refresh & AI Analysis Controls */}
-          <div className="flex items-center gap-2 md:gap-3 px-2 md:px-3 py-1.5 rounded-lg bg-accent/30">
-            <div className="flex items-center gap-1 md:gap-1.5">
-              <Switch
-                checked={autoRefresh}
-                onCheckedChange={setAutoRefresh}
-                className="scale-90"
-              />
-              <span className="text-[11px] md:text-[12px] text-muted-foreground hidden sm:inline">自动刷新</span>
-              {autoRefresh && (
-                <Select value={refreshInterval.toString()} onValueChange={v => setRefreshInterval(parseInt(v))}>
-                  <SelectTrigger className="h-6 w-14 md:w-16 text-[10px] md:text-[11px] px-1.5 md:px-2">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="10">10s</SelectItem>
-                    <SelectItem value="30">30s</SelectItem>
-                    <SelectItem value="60">1分钟</SelectItem>
-                    <SelectItem value="120">2分钟</SelectItem>
-                  </SelectContent>
-                </Select>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-2 md:gap-3 px-2 md:px-3 py-2 rounded-2xl bg-accent/20 border border-border/40">
+              <div className="flex items-center gap-1 md:gap-1.5">
+                <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} className="scale-90" />
+                <span className="text-[11px] md:text-[12px] text-muted-foreground hidden sm:inline">自动刷新</span>
+                {autoRefresh && (
+                  <Select value={refreshInterval.toString()} onValueChange={v => setRefreshInterval(parseInt(v))}>
+                    <SelectTrigger className="h-6 w-14 md:w-16 text-[10px] md:text-[11px] px-1.5 md:px-2">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="10">10s</SelectItem>
+                      <SelectItem value="30">30s</SelectItem>
+                      <SelectItem value="60">1分钟</SelectItem>
+                      <SelectItem value="120">2分钟</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+              <div className="w-px h-4 bg-border hidden sm:block" />
+              <div className="flex items-center gap-1 md:gap-1.5">
+                <Switch checked={enableAIAnalysis} onCheckedChange={setEnableAIAnalysis} className="scale-90" />
+                <span className="text-[11px] md:text-[12px] text-muted-foreground hidden sm:inline">AI 建议</span>
+              </div>
+              {lastRefreshTime && (
+                <span className="text-[9px] md:text-[10px] text-muted-foreground/60 hidden md:inline font-mono">
+                  {lastRefreshTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
               )}
             </div>
-            <div className="w-px h-4 bg-border hidden sm:block" />
-            <div className="flex items-center gap-1 md:gap-1.5">
-              <Switch
-                checked={enableAIAnalysis}
-                onCheckedChange={setEnableAIAnalysis}
-                className="scale-90"
-              />
-              <span className="text-[11px] md:text-[12px] text-muted-foreground hidden sm:inline">AI 建议</span>
-            </div>
-            {lastRefreshTime && (
-              <span className="text-[9px] md:text-[10px] text-muted-foreground/60 hidden md:inline">
-                {lastRefreshTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-              </span>
-            )}
+
+            <Button variant="secondary" size="sm" onClick={handleRefresh} disabled={quotesLoading || portfolioLoading} className="h-9 px-3">
+              <RefreshCw className={`w-4 h-4 ${quotesLoading || portfolioLoading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">刷新</span>
+            </Button>
           </div>
-          <Button variant="secondary" size="sm" onClick={handleRefresh} disabled={quotesLoading || portfolioLoading} className="h-8 md:h-9 px-2.5 md:px-3">
-            <RefreshCw className={`w-4 h-4 ${quotesLoading || portfolioLoading ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">刷新</span>
-          </Button>
+        </div>
+
+        {/* Market status pills */}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {marketStatus.map(m => {
+            const statusColors: Record<string, string> = {
+              trading: 'bg-emerald-500',
+              pre_market: 'bg-amber-500',
+              break: 'bg-amber-500',
+              after_hours: 'bg-slate-400',
+              closed: 'bg-slate-400',
+            }
+            return (
+              <div
+                key={m.code}
+                className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground flex items-center gap-1.5"
+                title={`${m.sessions.join(', ')} (${m.local_time})`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${statusColors[m.status] || 'bg-slate-400'}`} />
+                <span className="text-foreground/90">{m.name}</span>
+                <span className={`${m.is_trading ? 'text-emerald-600' : 'text-muted-foreground/60'}`}>{m.status_text}</span>
+              </div>
+            )
+          })}
+          {lastRefreshTime ? (
+            <div className="px-2.5 py-1 rounded-full bg-background/70 border border-border/50 text-[11px] text-muted-foreground">
+              更新 <span className="font-mono text-foreground/90">{lastRefreshTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+            </div>
+          ) : null}
         </div>
       </div>
 
