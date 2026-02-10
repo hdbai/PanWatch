@@ -22,6 +22,22 @@ interface AgentConfig {
   config: Record<string, unknown>
 }
 
+interface StockAgentInfo {
+  agent_name: string
+  schedule: string
+  ai_model_id: number | null
+  notify_channel_ids: number[]
+}
+
+interface StockConfig {
+  id: number
+  symbol: string
+  name: string
+  market: string
+  enabled: boolean
+  agents: StockAgentInfo[]
+}
+
 interface SchedulePreview {
   schedule: string
   timezone: string
@@ -136,10 +152,15 @@ function formatSchedule(cron: string): string {
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<AgentConfig[]>([])
+  const [stocks, setStocks] = useState<StockConfig[]>([])
   const [services, setServices] = useState<AIService[]>([])
   const [channels, setChannels] = useState<NotifyChannel[]>([])
   const [loading, setLoading] = useState(true)
   const [triggering, setTriggering] = useState<string | null>(null)
+
+  const [bindDialogAgent, setBindDialogAgent] = useState<AgentConfig | null>(null)
+  const [bindKeyword, setBindKeyword] = useState('')
+  const [bindSavingStockId, setBindSavingStockId] = useState<number | null>(null)
 
   const [health, setHealth] = useState<AgentsHealth | null>(null)
   const [healthLoading, setHealthLoading] = useState(false)
@@ -177,12 +198,14 @@ export default function AgentsPage() {
 
   const load = async () => {
     try {
-      const [agentData, servicesData, channelData] = await Promise.all([
+      const [agentData, stockData, servicesData, channelData] = await Promise.all([
         fetchAPI<AgentConfig[]>('/agents'),
+        fetchAPI<StockConfig[]>('/stocks'),
         fetchAPI<AIService[]>('/providers/services'),
         fetchAPI<NotifyChannel[]>('/channels'),
       ])
       setAgents(agentData)
+      setStocks(stockData)
       setServices(servicesData)
       setChannels(channelData)
 
@@ -250,6 +273,51 @@ export default function AgentsPage() {
       body: JSON.stringify({ enabled: !agent.enabled }),
     })
     load()
+  }
+
+  const hasAgentBound = (stock: StockConfig, agentName: string) =>
+    (stock.agents || []).some(a => a.agent_name === agentName)
+
+  const getAgentBoundCount = (agentName: string) =>
+    stocks.filter(s => s.enabled && hasAgentBound(s, agentName)).length
+
+  const filteredBindStocks = stocks
+    .filter(s => s.enabled)
+    .filter(s => {
+      const q = bindKeyword.trim().toLowerCase()
+      if (!q) return true
+      return s.symbol.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)
+    })
+
+  const toggleStockBindingForAgent = async (stock: StockConfig, agentName: string) => {
+    if (!agentName) return
+    if (bindSavingStockId === stock.id) return
+    setBindSavingStockId(stock.id)
+    try {
+      const current = stock.agents || []
+      const exists = current.some(a => a.agent_name === agentName)
+      const nextAgents = exists
+        ? current.filter(a => a.agent_name !== agentName)
+        : [...current, { agent_name: agentName, schedule: '', ai_model_id: null, notify_channel_ids: [] }]
+
+      const updated = await fetchAPI<StockConfig>(`/stocks/${stock.id}/agents`, {
+        method: 'PUT',
+        // 保留该股票已有 Agent 的 schedule/模型/通知覆盖，仅切换当前 Agent 绑定状态
+        body: JSON.stringify({
+          agents: nextAgents.map(a => ({
+            agent_name: a.agent_name,
+            schedule: a.schedule || '',
+            ai_model_id: a.ai_model_id ?? null,
+            notify_channel_ids: a.notify_channel_ids || [],
+          })),
+        }),
+      })
+      setStocks(prev => prev.map(s => (s.id === stock.id ? updated : s)))
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '切换绑定失败', 'error')
+    } finally {
+      setBindSavingStockId(null)
+    }
   }
 
   const triggerAgent = async (name: string) => {
@@ -382,6 +450,19 @@ export default function AgentsPage() {
                       <Badge variant="secondary" className="text-[10px]">{modeLabel}</Badge>
                     </div>
                     <p className="text-[13px] text-muted-foreground mt-2.5 ml-[22px] leading-relaxed">{agent.description}</p>
+                    <div className="mt-2.5 ml-[22px]">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="h-7 text-[11px]"
+                        onClick={() => {
+                          setBindDialogAgent(agent)
+                          setBindKeyword('')
+                        }}
+                      >
+                        绑定股票 {getAgentBoundCount(agent.name)} 只
+                      </Button>
+                    </div>
 
                     {/* 执行周期 - 可点击编辑 */}
                     <div className="flex items-center gap-2.5 mt-3.5 ml-[22px] flex-wrap">
@@ -668,6 +749,59 @@ export default function AgentsPage() {
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setScheduleDialogAgent(null)}>取消</Button>
               <Button onClick={saveSchedule}>保存</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!bindDialogAgent} onOpenChange={(open) => !open && setBindDialogAgent(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {bindDialogAgent ? `${bindDialogAgent.display_name} 股票绑定` : '股票绑定'}
+            </DialogTitle>
+            <DialogDescription>点击即可切换绑定/不绑定，不会覆盖该股票的其它 Agent 个性化配置</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div>
+              <Label>筛选股票</Label>
+              <Input
+                value={bindKeyword}
+                onChange={(e) => setBindKeyword(e.target.value)}
+                placeholder="按代码或名称筛选"
+              />
+            </div>
+
+            <div className="max-h-[40vh] overflow-y-auto rounded border border-border/50 divide-y divide-border/30">
+              {filteredBindStocks.length === 0 ? (
+                <div className="p-4 text-[12px] text-muted-foreground text-center">无可选股票</div>
+              ) : filteredBindStocks.map((s) => {
+                const bound = bindDialogAgent ? hasAgentBound(s, bindDialogAgent.name) : false
+                return (
+                  <div
+                    key={s.id}
+                    className="w-full px-3 py-2 text-[12px] flex items-center justify-between hover:bg-accent/40"
+                  >
+                    <div className="min-w-0 pr-2">
+                      <div className="font-mono">{s.symbol}</div>
+                      <div className="text-[11px] text-muted-foreground truncate">{s.name}</div>
+                    </div>
+                    <Button
+                      variant={bound ? 'default' : 'secondary'}
+                      size="sm"
+                      className="h-7 text-[11px]"
+                      disabled={!bindDialogAgent || bindSavingStockId === s.id}
+                      onClick={() => bindDialogAgent && toggleStockBindingForAgent(s, bindDialogAgent.name)}
+                    >
+                      {bindSavingStockId === s.id ? '处理中...' : bound ? '已绑定' : '未绑定'}
+                    </Button>
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="ghost" onClick={() => setBindDialogAgent(null)}>关闭</Button>
             </div>
           </div>
         </DialogContent>
