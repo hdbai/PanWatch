@@ -53,8 +53,10 @@ interface NewsItem {
   source: string
   source_label: string
   title: string
+  content?: string
   publish_time: string
   url: string
+  symbols?: string[]
 }
 
 interface HistoryRecord {
@@ -89,7 +91,7 @@ interface PortfolioSummaryResponse {
   }>
 }
 
-type InsightTab = 'overview' | 'kline' | 'suggestions' | 'news' | 'reports'
+type InsightTab = 'overview' | 'kline' | 'suggestions' | 'news' | 'announcements' | 'reports'
 
 interface StockAgentInfo {
   agent_name: string
@@ -274,7 +276,7 @@ export default function StockInsightModal(props: {
   const market = String(props.market || 'CN').trim().toUpperCase()
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState<InsightTab>('overview')
-  const [newsHours, setNewsHours] = useState('24')
+  const [newsHours, setNewsHours] = useState('168')
   const [includeExpiredSuggestions, setIncludeExpiredSuggestions] = useLocalStorage<boolean>(
     'stock_insight_include_expired_suggestions',
     true
@@ -294,6 +296,7 @@ export default function StockInsightModal(props: {
   const [miniHoverIdx, setMiniHoverIdx] = useState<number | null>(null)
   const [suggestions, setSuggestions] = useState<SuggestionInfo[]>([])
   const [news, setNews] = useState<NewsItem[]>([])
+  const [announcements, setAnnouncements] = useState<NewsItem[]>([])
   const [reports, setReports] = useState<HistoryRecord[]>([])
   const [reportTab, setReportTab] = useState<'premarket_outlook' | 'daily_report' | 'news_digest'>('premarket_outlook')
   const [klineInterval] = useState<'1d' | '1w' | '1m'>('1d')
@@ -371,8 +374,8 @@ export default function StockInsightModal(props: {
     const runQuery = async (opts: { useName: boolean; filterRelated: boolean }) => {
       const params = new URLSearchParams()
       params.set('hours', newsHours)
-      params.set('limit', '40')
-      params.set('filter_related', opts.filterRelated ? 'true' : 'false')
+      params.set('limit', '50')
+      if (!opts.filterRelated) params.set('filter_related', 'false')
       if (opts.useName && resolvedName && resolvedName !== symbol) params.set('names', resolvedName)
       else params.set('symbols', symbol)
       return fetchAPI<NewsItem[]>(`/news?${params.toString()}`)
@@ -388,6 +391,19 @@ export default function StockInsightModal(props: {
       }
       if ((data || []).length === 0) {
         data = await runQuery({ useName: false, filterRelated: false })
+      }
+      if ((data || []).length === 0) {
+        const global = await fetchAPI<NewsItem[]>(
+          `/news?hours=${encodeURIComponent(newsHours)}&limit=80`
+        ).catch(() => [])
+        const upperSymbol = symbol.toUpperCase()
+        const name = (resolvedName || '').trim()
+        data = (global || []).filter((n) => {
+          const text = `${n.title || ''} ${n.content || ''}`.toUpperCase()
+          if (upperSymbol && text.includes(upperSymbol)) return true
+          if (name && `${n.title || ''} ${n.content || ''}`.includes(name)) return true
+          return (n.symbols || []).map(x => String(x).toUpperCase()).includes(upperSymbol)
+        })
       }
       // 兜底：实时新闻为空时，回退到 news_digest 历史快照中的新闻列表
       if ((data || []).length === 0) {
@@ -426,6 +442,48 @@ export default function StockInsightModal(props: {
       setNews(data || [])
     } catch {
       setNews([])
+    }
+  }, [symbol, newsHours, resolvedName])
+
+  const loadAnnouncements = useCallback(async () => {
+    if (!symbol) return
+    try {
+      const runQuery = async (opts: { useName: boolean; filterRelated: boolean }) => {
+        const params = new URLSearchParams()
+        params.set('hours', newsHours)
+        params.set('limit', '50')
+        if (!opts.filterRelated) params.set('filter_related', 'false')
+        params.set('source', 'eastmoney')
+        if (opts.useName && resolvedName && resolvedName !== symbol) params.set('names', resolvedName)
+        else params.set('symbols', symbol)
+        return fetchAPI<NewsItem[]>(`/news?${params.toString()}`)
+      }
+      let data: NewsItem[] = await runQuery({ useName: true, filterRelated: true })
+      if ((data || []).length === 0 && resolvedName && resolvedName !== symbol) {
+        data = await runQuery({ useName: false, filterRelated: true })
+      }
+      if ((data || []).length === 0) {
+        data = await runQuery({ useName: true, filterRelated: false })
+      }
+      if ((data || []).length === 0) {
+        data = await runQuery({ useName: false, filterRelated: false })
+      }
+      if ((data || []).length === 0) {
+        const global = await fetchAPI<NewsItem[]>(
+          `/news?hours=${encodeURIComponent(newsHours)}&limit=80&source=eastmoney`
+        ).catch(() => [])
+        const upperSymbol = symbol.toUpperCase()
+        const name = (resolvedName || '').trim()
+        data = (global || []).filter((n) => {
+          const text = `${n.title || ''} ${n.content || ''}`.toUpperCase()
+          if (upperSymbol && text.includes(upperSymbol)) return true
+          if (name && `${n.title || ''} ${n.content || ''}`.includes(name)) return true
+          return (n.symbols || []).map(x => String(x).toUpperCase()).includes(upperSymbol)
+        })
+      }
+      setAnnouncements(data || [])
+    } catch {
+      setAnnouncements([])
     }
   }, [symbol, newsHours, resolvedName])
 
@@ -524,13 +582,13 @@ export default function StockInsightModal(props: {
     if (!symbol) return
     setLoading(true)
     try {
-      await Promise.allSettled([loadQuote(), loadKline(), loadMiniKline(), loadSuggestions(), loadNews(), loadHoldingAgg(), loadReports()])
+      await Promise.allSettled([loadQuote(), loadKline(), loadMiniKline(), loadSuggestions(), loadNews(), loadAnnouncements(), loadHoldingAgg(), loadReports()])
     } catch (e) {
       toast(e instanceof Error ? e.message : '加载失败', 'error')
     } finally {
       setLoading(false)
     }
-  }, [symbol, loadQuote, loadKline, loadMiniKline, loadSuggestions, loadNews, loadHoldingAgg, loadReports, toast])
+  }, [symbol, loadQuote, loadKline, loadMiniKline, loadSuggestions, loadNews, loadAnnouncements, loadHoldingAgg, loadReports, toast])
 
   const refreshForAuto = useCallback(async () => {
     if (!symbol) return
@@ -544,17 +602,21 @@ export default function StockInsightModal(props: {
     if (tab === 'overview' || tab === 'news') {
       tasks.push(loadNews())
     }
+    if (tab === 'overview' || tab === 'announcements') {
+      tasks.push(loadAnnouncements())
+    }
     if (tab === 'overview' || tab === 'reports') {
       tasks.push(loadReports())
     }
     await Promise.allSettled(tasks)
-  }, [symbol, tab, loadQuote, loadHoldingAgg, loadKline, loadMiniKline, loadSuggestions, loadNews, loadReports])
+  }, [symbol, tab, loadQuote, loadHoldingAgg, loadKline, loadMiniKline, loadSuggestions, loadNews, loadAnnouncements, loadReports])
 
   useEffect(() => {
     if (!props.open || !symbol) return
     setTab('overview')
     setSuggestions([])
     setNews([])
+    setAnnouncements([])
     setReports([])
     setMiniKlines([])
     loadCore()
@@ -564,6 +626,11 @@ export default function StockInsightModal(props: {
     if (!props.open || !symbol) return
     loadNews().catch(() => setNews([]))
   }, [props.open, symbol, newsHours, loadNews])
+
+  useEffect(() => {
+    if (!props.open || !symbol) return
+    loadAnnouncements().catch(() => setAnnouncements([]))
+  }, [props.open, symbol, newsHours, loadAnnouncements])
 
   useEffect(() => {
     if (!props.open || !symbol) return
@@ -938,10 +1005,11 @@ export default function StockInsightModal(props: {
             <div className="flex items-center gap-1 flex-wrap">
               {[
                 { id: 'overview', label: '概览' },
-                { id: 'kline', label: 'K线' },
                 { id: 'suggestions', label: `建议 (${suggestions.length})` },
-                { id: 'news', label: `新闻 (${news.length})` },
                 { id: 'reports', label: `报告 (${reports.length})` },
+                { id: 'kline', label: 'K线' },
+                { id: 'announcements', label: `公告 (${announcements.length})` },
+                { id: 'news', label: `新闻 (${news.length})` },
               ].map(item => (
                 <button
                   key={item.id}
@@ -1110,6 +1178,9 @@ export default function StockInsightModal(props: {
                   <div className="card p-4 h-full flex flex-col">
                     <div className="flex items-center justify-between mb-2">
                       <div className="text-[12px] text-muted-foreground">AI建议</div>
+                      <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px] text-muted-foreground" onClick={() => setTab('suggestions')}>
+                        更多
+                      </Button>
                       {autoSuggesting && suggestions.length > 0 && (
                         <div className="text-[10px] text-primary">更新中...</div>
                       )}
@@ -1149,13 +1220,15 @@ export default function StockInsightModal(props: {
                         {autoSuggesting ? '正在自动生成 AI 建议（通常 5-15 秒）...' : '暂无 AI 建议'}
                       </div>
                     )}
-                    <Button variant="secondary" size="sm" className="h-8 mt-auto" onClick={() => setTab('suggestions')}>
-                      查看建议列表
-                    </Button>
                   </div>
 
                   <div className="card p-4 h-full flex flex-col">
-                    <div className="text-[12px] text-muted-foreground mb-2">新闻</div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-[12px] text-muted-foreground">新闻</div>
+                      <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px] text-muted-foreground" onClick={() => setTab('news')}>
+                        更多
+                      </Button>
+                    </div>
                     <div className="flex-1 space-y-2">
                       {news.length === 0 ? (
                         <div className="text-[12px] text-muted-foreground py-6">暂无相关新闻</div>
@@ -1174,15 +1247,12 @@ export default function StockInsightModal(props: {
                         ))
                       )}
                     </div>
-                    <Button variant="secondary" size="sm" className="h-8 mt-2" onClick={() => setTab('news')}>
-                      查看新闻列表
-                    </Button>
                   </div>
                   <div className="card p-4 h-full flex flex-col">
                     <div className="flex items-center justify-between gap-2 mb-2">
-                      <div className="text-[12px] text-muted-foreground">报告预览</div>
-                      <Button variant="secondary" size="sm" className="h-7 px-2.5 text-[11px]" onClick={() => setTab('reports')}>
-                        查看完整报告
+                      <div className="text-[12px] text-muted-foreground">AI报告</div>
+                      <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px] text-muted-foreground" onClick={() => setTab('reports')}>
+                        更多
                       </Button>
                     </div>
                     {!latestReport ? (
@@ -1313,6 +1383,43 @@ export default function StockInsightModal(props: {
                   news.map((item, idx) => (
                     <a
                       key={`${item.publish_time || 'n'}-${idx}`}
+                      href={item.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="card block p-4 hover:bg-accent/20 transition-colors"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-[13px] font-medium text-foreground line-clamp-2">{item.title}</div>
+                        <ExternalLink className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                      </div>
+                      <div className="mt-2 text-[11px] text-muted-foreground">{item.source_label || item.source} · {formatTime(item.publish_time)}</div>
+                    </a>
+                  ))
+                )}
+              </div>
+            )}
+
+            {tab === 'announcements' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-end">
+                  <Select value={newsHours} onValueChange={setNewsHours}>
+                    <SelectTrigger className="h-8 w-[110px] text-[12px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="24">近24小时</SelectItem>
+                      <SelectItem value="48">近48小时</SelectItem>
+                      <SelectItem value="72">近72小时</SelectItem>
+                      <SelectItem value="168">近7天</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {announcements.length === 0 ? (
+                  <div className="card p-6 text-[12px] text-muted-foreground text-center">暂无公告</div>
+                ) : (
+                  announcements.map((item, idx) => (
+                    <a
+                      key={`${item.publish_time || 'a'}-${idx}`}
                       href={item.url}
                       target="_blank"
                       rel="noreferrer"
