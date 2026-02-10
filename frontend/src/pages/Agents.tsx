@@ -160,7 +160,8 @@ export default function AgentsPage() {
 
   const [bindDialogAgent, setBindDialogAgent] = useState<AgentConfig | null>(null)
   const [bindKeyword, setBindKeyword] = useState('')
-  const [bindSavingStockId, setBindSavingStockId] = useState<number | null>(null)
+  const [bindFilter, setBindFilter] = useState<'all' | 'bound' | 'unbound'>('all')
+  const [bindSavingStockIds, setBindSavingStockIds] = useState<Set<number>>(new Set())
 
   const [health, setHealth] = useState<AgentsHealth | null>(null)
   const [healthLoading, setHealthLoading] = useState(false)
@@ -275,11 +276,20 @@ export default function AgentsPage() {
     load()
   }
 
+  const openBindDialog = (agent: AgentConfig) => {
+    setBindDialogAgent(agent)
+    setBindKeyword('')
+    setBindFilter('all')
+  }
+
   const hasAgentBound = (stock: StockConfig, agentName: string) =>
     (stock.agents || []).some(a => a.agent_name === agentName)
 
   const getAgentBoundCount = (agentName: string) =>
     stocks.filter(s => s.enabled && hasAgentBound(s, agentName)).length
+
+  const getBoundStocks = (agentName: string) =>
+    stocks.filter(s => s.enabled && hasAgentBound(s, agentName))
 
   const filteredBindStocks = stocks
     .filter(s => s.enabled)
@@ -288,17 +298,42 @@ export default function AgentsPage() {
       if (!q) return true
       return s.symbol.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)
     })
+    .filter(s => {
+      if (!bindDialogAgent) return true
+      const bound = hasAgentBound(s, bindDialogAgent.name)
+      if (bindFilter === 'bound') return bound
+      if (bindFilter === 'unbound') return !bound
+      return true
+    })
+
+  const updateBindSaving = (stockId: number, saving: boolean) => {
+    setBindSavingStockIds(prev => {
+      const next = new Set(prev)
+      if (saving) next.add(stockId)
+      else next.delete(stockId)
+      return next
+    })
+  }
+
+  const buildNextAgents = (stock: StockConfig, agentName: string, shouldBind: boolean) => {
+    const current = stock.agents || []
+    const exists = current.some(a => a.agent_name === agentName)
+    if (shouldBind && !exists) {
+      return [...current, { agent_name: agentName, schedule: '', ai_model_id: null, notify_channel_ids: [] }]
+    }
+    if (!shouldBind && exists) {
+      return current.filter(a => a.agent_name !== agentName)
+    }
+    return current
+  }
 
   const toggleStockBindingForAgent = async (stock: StockConfig, agentName: string) => {
     if (!agentName) return
-    if (bindSavingStockId === stock.id) return
-    setBindSavingStockId(stock.id)
+    if (bindSavingStockIds.has(stock.id)) return
+    updateBindSaving(stock.id, true)
     try {
-      const current = stock.agents || []
-      const exists = current.some(a => a.agent_name === agentName)
-      const nextAgents = exists
-        ? current.filter(a => a.agent_name !== agentName)
-        : [...current, { agent_name: agentName, schedule: '', ai_model_id: null, notify_channel_ids: [] }]
+      const exists = (stock.agents || []).some(a => a.agent_name === agentName)
+      const nextAgents = buildNextAgents(stock, agentName, !exists)
 
       const updated = await fetchAPI<StockConfig>(`/stocks/${stock.id}/agents`, {
         method: 'PUT',
@@ -316,7 +351,43 @@ export default function AgentsPage() {
     } catch (e) {
       toast(e instanceof Error ? e.message : '切换绑定失败', 'error')
     } finally {
-      setBindSavingStockId(null)
+      updateBindSaving(stock.id, false)
+    }
+  }
+
+  const applyBulkBindingForAgent = async (shouldBind: boolean) => {
+    if (!bindDialogAgent) return
+    const target = filteredBindStocks.filter(s => hasAgentBound(s, bindDialogAgent.name) !== shouldBind)
+    if (target.length === 0) {
+      toast(shouldBind ? '当前筛选已全部绑定' : '当前筛选已全部解绑', 'info')
+      return
+    }
+
+    setBindSavingStockIds(new Set(target.map(s => s.id)))
+    try {
+      const tasks = target.map(async (stock) => {
+        const nextAgents = buildNextAgents(stock, bindDialogAgent.name, shouldBind)
+        const updated = await fetchAPI<StockConfig>(`/stocks/${stock.id}/agents`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            agents: nextAgents.map(a => ({
+              agent_name: a.agent_name,
+              schedule: a.schedule || '',
+              ai_model_id: a.ai_model_id ?? null,
+              notify_channel_ids: a.notify_channel_ids || [],
+            })),
+          }),
+        })
+        return updated
+      })
+      const updatedList = await Promise.all(tasks)
+      const map = new Map(updatedList.map(s => [s.id, s]))
+      setStocks(prev => prev.map(s => map.get(s.id) || s))
+      toast(shouldBind ? `已绑定 ${updatedList.length} 只` : `已解绑 ${updatedList.length} 只`, 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '批量操作失败', 'error')
+    } finally {
+      setBindSavingStockIds(new Set())
     }
   }
 
@@ -440,6 +511,10 @@ export default function AgentsPage() {
           {agents.map(agent => {
             const modeLabel = agent.execution_mode === 'single' ? '逐只分析' : '批量分析'
             const preview = previews[agent.name]
+            const boundStocks = getBoundStocks(agent.name)
+            const boundSummary = boundStocks.length > 0
+              ? `${boundStocks.slice(0, 3).map(s => s.name || s.symbol).join('、')}${boundStocks.length > 3 ? '、...更多' : ''}`
+              : '未绑定股票'
             return (
               <div key={agent.name} className="card-hover p-4 md:p-6">
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 sm:gap-6">
@@ -448,21 +523,20 @@ export default function AgentsPage() {
                       <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${agent.enabled ? 'bg-emerald-500' : 'bg-border'}`} />
                       <h3 className="text-[15px] font-semibold text-foreground">{agent.display_name}</h3>
                       <Badge variant="secondary" className="text-[10px]">{modeLabel}</Badge>
+                      <button
+                        type="button"
+                        onClick={() => openBindDialog(agent)}
+                        className={`max-w-[320px] truncate px-2 py-0.5 rounded-md border text-[11px] transition-colors ${
+                          boundStocks.length > 0
+                            ? 'bg-primary/12 border-primary/35 text-primary hover:bg-primary/18'
+                            : 'bg-accent/30 border-border/60 text-muted-foreground hover:border-primary/30'
+                        }`}
+                        title={`${boundSummary}（已绑定 ${getAgentBoundCount(agent.name)} / ${stocks.filter(s => s.enabled).length}）`}
+                      >
+                        {boundSummary}
+                      </button>
                     </div>
                     <p className="text-[13px] text-muted-foreground mt-2.5 ml-[22px] leading-relaxed">{agent.description}</p>
-                    <div className="mt-2.5 ml-[22px]">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        className="h-7 text-[11px]"
-                        onClick={() => {
-                          setBindDialogAgent(agent)
-                          setBindKeyword('')
-                        }}
-                      >
-                        绑定股票 {getAgentBoundCount(agent.name)} 只
-                      </Button>
-                    </div>
 
                     {/* 执行周期 - 可点击编辑 */}
                     <div className="flex items-center gap-2.5 mt-3.5 ml-[22px] flex-wrap">
@@ -772,32 +846,45 @@ export default function AgentsPage() {
               />
             </div>
 
-            <div className="max-h-[40vh] overflow-y-auto rounded border border-border/50 divide-y divide-border/30">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5">
+                <Button variant={bindFilter === 'all' ? 'default' : 'secondary'} size="sm" className="h-7 text-[11px]" onClick={() => setBindFilter('all')}>全部</Button>
+                <Button variant={bindFilter === 'bound' ? 'default' : 'secondary'} size="sm" className="h-7 text-[11px]" onClick={() => setBindFilter('bound')}>已绑定</Button>
+                <Button variant={bindFilter === 'unbound' ? 'default' : 'secondary'} size="sm" className="h-7 text-[11px]" onClick={() => setBindFilter('unbound')}>未绑定</Button>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Button variant="secondary" size="sm" className="h-7 text-[11px]" disabled={!bindDialogAgent || bindSavingStockIds.size > 0} onClick={() => applyBulkBindingForAgent(true)}>批量绑定</Button>
+                <Button variant="secondary" size="sm" className="h-7 text-[11px]" disabled={!bindDialogAgent || bindSavingStockIds.size > 0} onClick={() => applyBulkBindingForAgent(false)}>批量解绑</Button>
+              </div>
+            </div>
+
+            <div className="max-h-[40vh] overflow-y-auto rounded border border-border/50 p-3">
               {filteredBindStocks.length === 0 ? (
                 <div className="p-4 text-[12px] text-muted-foreground text-center">无可选股票</div>
-              ) : filteredBindStocks.map((s) => {
-                const bound = bindDialogAgent ? hasAgentBound(s, bindDialogAgent.name) : false
-                return (
-                  <div
-                    key={s.id}
-                    className="w-full px-3 py-2 text-[12px] flex items-center justify-between hover:bg-accent/40"
-                  >
-                    <div className="min-w-0 pr-2">
-                      <div className="font-mono">{s.symbol}</div>
-                      <div className="text-[11px] text-muted-foreground truncate">{s.name}</div>
-                    </div>
-                    <Button
-                      variant={bound ? 'default' : 'secondary'}
-                      size="sm"
-                      className="h-7 text-[11px]"
-                      disabled={!bindDialogAgent || bindSavingStockId === s.id}
-                      onClick={() => bindDialogAgent && toggleStockBindingForAgent(s, bindDialogAgent.name)}
-                    >
-                      {bindSavingStockId === s.id ? '处理中...' : bound ? '已绑定' : '未绑定'}
-                    </Button>
-                  </div>
-                )
-              })}
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {filteredBindStocks.map((s) => {
+                    const bound = bindDialogAgent ? hasAgentBound(s, bindDialogAgent.name) : false
+                    const saving = bindSavingStockIds.has(s.id)
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        disabled={!bindDialogAgent || saving}
+                        onClick={() => bindDialogAgent && toggleStockBindingForAgent(s, bindDialogAgent.name)}
+                        className={`h-8 px-3 rounded-full text-[12px] border transition-colors disabled:opacity-60 ${
+                          bound
+                            ? 'bg-primary/12 border-primary/35 text-primary hover:bg-primary/18'
+                            : 'bg-accent/30 border-border/60 text-muted-foreground hover:border-primary/30'
+                        }`}
+                        title={`${s.name} (${s.symbol})`}
+                      >
+                        {saving ? '处理中...' : s.name || s.symbol}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end gap-2 pt-1">
