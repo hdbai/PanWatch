@@ -936,6 +936,7 @@ async def trigger_agent_for_stock(
     stock,
     stock_agent_id: int | None = None,
     bypass_throttle: bool = False,
+    bypass_market_hours: bool = False,
 ) -> dict:
     """手动触发 Agent 执行（单只股票）"""
     start = time.monotonic()
@@ -977,9 +978,12 @@ async def trigger_agent_for_stock(
         model_label=model_label,
     )
 
-    # 创建 agent，支持 bypass_throttle 参数
-    if agent_name == "intraday_monitor" and bypass_throttle:
-        agent = agent_cls(bypass_throttle=True)
+    # 创建 agent，支持 intraday_monitor 的手动触发参数
+    if agent_name == "intraday_monitor":
+        agent = agent_cls(
+            bypass_throttle=bypass_throttle,
+            bypass_market_hours=bypass_market_hours,
+        )
     else:
         agent = agent_cls()
 

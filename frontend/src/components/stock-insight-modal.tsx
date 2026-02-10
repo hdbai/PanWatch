@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ExternalLink, RefreshCw } from 'lucide-react'
+import { Copy, Download, ExternalLink, RefreshCw, Share2 } from 'lucide-react'
 import { fetchAPI, useLocalStorage } from '@/lib/utils'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -174,6 +174,42 @@ function marketBadge(market: string) {
   return { style: 'bg-blue-500/10 text-blue-600', label: 'A股' }
 }
 
+function parseSuggestionJson(raw: unknown): Record<string, any> | null {
+  if (typeof raw !== 'string') return null
+  const s = raw.trim()
+  if (!s.startsWith('{') || !s.endsWith('}')) return null
+  try {
+    const obj = JSON.parse(s)
+    if (obj && typeof obj === 'object') return obj as Record<string, any>
+    return null
+  } catch {
+    return null
+  }
+}
+
+function normalizeSuggestionAction(action?: string, actionLabel?: string): string {
+  const a = String(action || '').trim().toLowerCase()
+  const l = String(actionLabel || '').trim()
+  if (a === 'buy/add' || a === 'add/buy') return /加仓|增持|补仓/.test(l) ? 'add' : 'buy'
+  if (a === 'sell/reduce' || a === 'reduce/sell') return /减仓|减持/.test(l) ? 'reduce' : 'sell'
+  return a || 'watch'
+}
+
+function pickSuggestionText(raw: unknown, field: 'signal' | 'reason'): string {
+  const plain = String(raw || '').trim()
+  const obj = parseSuggestionJson(plain)
+  if (obj) {
+    const v = String(obj[field] || '').trim()
+    if (v) return v
+    if (field === 'reason') {
+      const rv = String(obj['raw'] || '').trim()
+      if (rv) return rv
+    }
+    return ''
+  }
+  return plain
+}
+
 function TechnicalIndicatorStrip(props: {
   klineSummary: KlineSummary | null
   technicalSuggestion: SuggestionInfo | null
@@ -264,6 +300,7 @@ export default function StockInsightModal(props: {
   const [klineDays] = useState<'60' | '120' | '250'>('120')
   const [alerting, setAlerting] = useState(false)
   const [autoSuggesting, setAutoSuggesting] = useState(false)
+  const [imageExporting, setImageExporting] = useState(false)
   const [holdingAgg, setHoldingAgg] = useState<{
     quantity: number
     cost: number
@@ -271,6 +308,7 @@ export default function StockInsightModal(props: {
     marketValue: number
     pnl: number
   } | null>(null)
+  const [holdingLoaded, setHoldingLoaded] = useState(false)
   const autoTriggeredRef = useRef<Record<string, number>>({})
   const stockCacheRef = useRef<Record<string, StockItem>>({})
   const resolvedName = useMemo(() => props.stockName || quote?.name || symbol, [props.stockName, quote?.name, symbol])
@@ -311,10 +349,10 @@ export default function StockInsightModal(props: {
     const data = await fetchAPI<any[]>(`/suggestions/${encodeURIComponent(symbol)}?${params.toString()}`)
     const list = (data || []).map(item => ({
       id: item.id,
-      action: item.action,
-      action_label: item.action_label,
-      signal: item.signal || '',
-      reason: item.reason || '',
+      action: normalizeSuggestionAction(item.action, item.action_label),
+      action_label: item.action_label || '',
+      signal: pickSuggestionText(item.signal, 'signal'),
+      reason: pickSuggestionText(item.reason, 'reason'),
       should_alert: !!item.should_alert,
       agent_name: item.agent_name,
       agent_label: item.agent_label,
@@ -393,6 +431,7 @@ export default function StockInsightModal(props: {
 
   const loadHoldingAgg = useCallback(async () => {
     if (!symbol) return
+    setHoldingLoaded(false)
     try {
       const data = await fetchAPI<PortfolioSummaryResponse>('/portfolio/summary?include_quotes=true')
       let quantity = 0
@@ -412,6 +451,8 @@ export default function StockInsightModal(props: {
       else setHoldingAgg(null)
     } catch {
       setHoldingAgg(null)
+    } finally {
+      setHoldingLoaded(true)
     }
   }, [symbol, market])
 
@@ -601,6 +642,145 @@ export default function StockInsightModal(props: {
   }, [reports])
   const activeReport = reportMap[reportTab]
   const latestReport = reports[0] || null
+  const latestShareSuggestion = suggestions[0] || technicalFallbackSuggestion
+  const shareCardPayload = useMemo(() => {
+    const marketLabel = badge.label
+    const price = quote?.current_price != null ? formatNumber(quote.current_price) : '--'
+    const chg = quote?.change_pct != null ? `${quote.change_pct >= 0 ? '+' : ''}${quote.change_pct.toFixed(2)}%` : '--'
+    const action = latestShareSuggestion?.action_label || latestShareSuggestion?.action || '暂无'
+    const signal = latestShareSuggestion?.signal || '--'
+    const reason = latestShareSuggestion?.reason || '--'
+    const rawRisks = (latestShareSuggestion as any)?.meta?.risks
+    const risks = Array.isArray(rawRisks) && rawRisks.length > 0 ? rawRisks.slice(0, 2).join('；') : '--'
+    const source = latestShareSuggestion?.agent_label || latestShareSuggestion?.agent_name || '技术指标'
+    const ts = new Date().toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+    return { marketLabel, price, chg, action, signal, reason, risks, source, ts }
+  }, [badge.label, latestShareSuggestion, quote?.change_pct, quote?.current_price])
+
+  const shareText = useMemo(() => {
+    const { marketLabel, price, chg, action, signal, reason, risks, source, ts } = shareCardPayload
+    return [
+      `【PanWatch 洞察】${resolvedName}（${symbol} · ${marketLabel}）`,
+      `时间：${ts}`,
+      `现价：${price}（${chg}）`,
+      `建议：${action}`,
+      `信号：${signal}`,
+      `理由：${reason}`,
+      `风险：${risks}`,
+      `来源：${source}`,
+    ].join('\n')
+  }, [shareCardPayload, resolvedName, symbol])
+
+  const handleExportShareImage = useCallback(async () => {
+    const esc = (s: string) => String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;')
+    const trim = (s: string, n = 42) => {
+      const x = String(s || '')
+      return x.length > n ? `${x.slice(0, n - 1)}…` : x
+    }
+
+    setImageExporting(true)
+    try {
+      const { marketLabel, price, chg, action, signal, reason, risks, source, ts } = shareCardPayload
+      const up = (quote?.change_pct || 0) >= 0
+      const changeColor = up ? '#ef4444' : '#10b981'
+      const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1220"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1200" height="630" fill="url(#bg)"/>
+  <rect x="40" y="40" width="1120" height="550" rx="22" fill="#0f172a" stroke="#1f2937"/>
+  <text x="76" y="104" fill="#93c5fd" font-size="26" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">PanWatch 洞察</text>
+  <text x="76" y="150" fill="#f8fafc" font-size="42" font-weight="700" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">${esc(trim(`${resolvedName}（${symbol} · ${marketLabel}）`, 28))}</text>
+  <text x="76" y="198" fill="#94a3b8" font-size="22" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">${esc(ts)}</text>
+
+  <text x="76" y="284" fill="#94a3b8" font-size="24" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">现价</text>
+  <text x="180" y="284" fill="#f8fafc" font-size="52" font-weight="700" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">${esc(price)}</text>
+  <text x="380" y="284" fill="${changeColor}" font-size="36" font-weight="700" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">${esc(chg)}</text>
+
+  <text x="76" y="352" fill="#94a3b8" font-size="24" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">建议</text>
+  <text x="180" y="352" fill="#22d3ee" font-size="34" font-weight="700" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">${esc(trim(action, 20))}</text>
+
+  <text x="76" y="412" fill="#94a3b8" font-size="24" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">信号</text>
+  <text x="180" y="412" fill="#e2e8f0" font-size="26" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">${esc(trim(signal, 46))}</text>
+
+  <text x="76" y="466" fill="#94a3b8" font-size="24" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">理由</text>
+  <text x="180" y="466" fill="#cbd5e1" font-size="24" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">${esc(trim(reason, 52))}</text>
+
+  <text x="76" y="520" fill="#94a3b8" font-size="24" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">风险</text>
+  <text x="180" y="520" fill="#cbd5e1" font-size="24" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">${esc(trim(risks, 52))}</text>
+
+  <text x="76" y="566" fill="#64748b" font-size="20" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif">来源：${esc(source)} · 仅供参考，不构成投资建议</text>
+</svg>`
+
+      const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image()
+        el.onload = () => resolve(el)
+        el.onerror = reject
+        el.src = url
+      })
+      const canvas = document.createElement('canvas')
+      canvas.width = 1200
+      canvas.height = 630
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('无法创建画布')
+      ctx.drawImage(img, 0, 0)
+      URL.revokeObjectURL(url)
+      const png = canvas.toDataURL('image/png')
+      const a = document.createElement('a')
+      a.href = png
+      a.download = `panwatch-${symbol}-${Date.now()}.png`
+      a.click()
+      toast('分享图片已生成并下载', 'success')
+    } catch {
+      toast('图片生成失败，请稍后重试', 'error')
+    } finally {
+      setImageExporting(false)
+    }
+  }, [quote?.change_pct, resolvedName, shareCardPayload, symbol, toast])
+
+  const handleCopyShareText = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(shareText)
+      toast('洞察内容已复制', 'success')
+    } catch {
+      toast('复制失败，请检查浏览器权限', 'error')
+    }
+  }, [shareText, toast])
+
+  const handleShareInsight = useCallback(async () => {
+    try {
+      if (typeof navigator !== 'undefined' && (navigator as any).share) {
+        await (navigator as any).share({
+          title: `${resolvedName} 洞察`,
+          text: shareText,
+        })
+        return
+      }
+      await handleCopyShareText()
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return
+      await handleCopyShareText()
+    }
+  }, [handleCopyShareText, resolvedName, shareText])
+
   const handleSetAlert = async () => {
     if (!symbol) return
     setAlerting(true)
@@ -629,7 +809,7 @@ export default function StockInsightModal(props: {
         method: 'PUT',
         body: JSON.stringify({ agents: nextAgents }),
       })
-      await fetchAPI(`/stocks/${stock.id}/agents/intraday_monitor/trigger?bypass_throttle=true`, { method: 'POST' })
+      await fetchAPI(`/stocks/${stock.id}/agents/intraday_monitor/trigger?bypass_throttle=true&bypass_market_hours=true`, { method: 'POST' })
       toast('已设置提醒并触发一次盘中监测', 'success')
       await Promise.allSettled([loadSuggestions()])
     } catch (e) {
@@ -677,7 +857,8 @@ export default function StockInsightModal(props: {
   }, [market, symbol, resolvedName])
 
   const triggerAutoAiSuggestion = useCallback(async () => {
-    if (!symbol || !market || hasHolding || suggestions.length > 0 || autoSuggesting) return
+    // 自动建议仅针对“确认未持仓”的股票，避免持仓股重复触发
+    if (!symbol || !market || !holdingLoaded || hasHolding || suggestions.length > 0 || autoSuggesting) return
     const key = `${market}:${symbol}`
     const lastTs = autoTriggeredRef.current[key] || 0
     if (Date.now() - lastTs < 5 * 60 * 1000) return
@@ -687,14 +868,14 @@ export default function StockInsightModal(props: {
       const stock = await ensureStockAndAgent('intraday_monitor')
       if (!stock) return
       // intraday_monitor 较 chart_analyst 更轻量、稳定，不依赖截图链路
-      await fetchAPI(`/stocks/${stock.id}/agents/intraday_monitor/trigger?bypass_throttle=true`, { method: 'POST' })
+      await fetchAPI(`/stocks/${stock.id}/agents/intraday_monitor/trigger?bypass_throttle=true&bypass_market_hours=true`, { method: 'POST' })
       await Promise.allSettled([loadSuggestions()])
     } catch {
       // 自动触发失败时静默降级到技术指标建议，不打断用户
     } finally {
       setAutoSuggesting(false)
     }
-  }, [symbol, market, hasHolding, suggestions.length, autoSuggesting, ensureStockAndAgent, loadSuggestions])
+  }, [symbol, market, holdingLoaded, hasHolding, suggestions.length, autoSuggesting, ensureStockAndAgent, loadSuggestions])
 
   useEffect(() => {
     if (!props.open || !symbol) return
@@ -731,6 +912,18 @@ export default function StockInsightModal(props: {
                 <DialogDescription>概览、K线、AI建议、新闻、历史分析都在同一弹窗查看</DialogDescription>
               </div>
               <div className="flex items-center gap-2">
+                <Button variant="secondary" size="sm" className="h-8 px-2.5" onClick={() => handleExportShareImage()} disabled={imageExporting}>
+                  <Download className={`w-3.5 h-3.5 ${imageExporting ? 'animate-pulse' : ''}`} />
+                  <span className="hidden sm:inline">{imageExporting ? '生成中' : '图片'}</span>
+                </Button>
+                <Button variant="secondary" size="sm" className="h-8 px-2.5" onClick={() => handleShareInsight()}>
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">分享</span>
+                </Button>
+                <Button variant="secondary" size="sm" className="h-8 px-2.5" onClick={() => handleCopyShareText()}>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">复制</span>
+                </Button>
                 <Button variant="secondary" size="sm" className="h-8 px-2.5" onClick={handleSetAlert} disabled={alerting}>
                   {alerting ? '设置中...' : '一键设提醒'}
                 </Button>
@@ -915,7 +1108,12 @@ export default function StockInsightModal(props: {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-stretch">
                   <div className="card p-4 h-full flex flex-col">
-                    <div className="text-[12px] text-muted-foreground mb-2">AI建议</div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-[12px] text-muted-foreground">AI建议</div>
+                      {autoSuggesting && suggestions.length > 0 && (
+                        <div className="text-[10px] text-primary">更新中...</div>
+                      )}
+                    </div>
                     {suggestions.length > 0 ? (
                       <div className="space-y-2">
                         <SuggestionBadge
@@ -944,10 +1142,12 @@ export default function StockInsightModal(props: {
                             ))}
                           </div>
                         )}
-                        <div className="text-[10px] text-primary min-h-[14px]">{autoSuggesting ? '正在自动生成 AI 建议...' : ''}</div>
+                        <div className="text-[10px] text-primary min-h-[14px]">{autoSuggesting && suggestions.length === 0 ? '正在自动生成 AI 建议...' : ''}</div>
                       </div>
                     ) : (
-                      <div className="text-[12px] text-muted-foreground py-6">暂无 AI 建议</div>
+                      <div className="text-[12px] text-muted-foreground py-6">
+                        {autoSuggesting ? '正在自动生成 AI 建议（通常 5-15 秒）...' : '暂无 AI 建议'}
+                      </div>
                     )}
                     <Button variant="secondary" size="sm" className="h-8 mt-auto" onClick={() => setTab('suggestions')}>
                       查看建议列表

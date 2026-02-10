@@ -67,6 +67,7 @@ class IntradayMonitorAgent(BaseAgent):
         self,
         throttle_minutes: int = 30,
         bypass_throttle: bool = False,
+        bypass_market_hours: bool = False,
         event_only: bool = True,
         price_alert_threshold: float = 3.0,
         volume_alert_ratio: float = 2.0,
@@ -77,6 +78,7 @@ class IntradayMonitorAgent(BaseAgent):
         Args:
             throttle_minutes: 同一股票通知间隔（分钟）
             bypass_throttle: 是否跳过节流（测试用）
+            bypass_market_hours: 是否跳过交易时段门禁（仅手动分析场景）
             price_alert_threshold: 涨跌幅超过阈值视为价格异动（%）
             volume_alert_ratio: 量比超过阈值视为放量异动
             stop_loss_warning: 浮亏超过阈值触发止损预警（%）
@@ -84,6 +86,7 @@ class IntradayMonitorAgent(BaseAgent):
         """
         self.throttle_minutes = throttle_minutes
         self.bypass_throttle = bypass_throttle
+        self.bypass_market_hours = bypass_market_hours
         self.event_only = event_only
         self.price_alert_threshold = price_alert_threshold
         self.volume_alert_ratio = volume_alert_ratio
@@ -103,7 +106,7 @@ class IntradayMonitorAgent(BaseAgent):
         name = stock_config.name if stock_config else symbol
 
         # 按股票所属市场做交易时段门禁（而非全局任一市场开盘）
-        if not is_market_trading(market):
+        if not self.bypass_market_hours and not is_market_trading(market):
             msg = f"当前{market_label(market)}非交易时段，已跳过执行"
             logger.info(f"{msg}: {symbol}")
             return {

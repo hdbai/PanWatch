@@ -268,6 +268,7 @@ async def trigger_stock_agent(
     stock_id: int,
     agent_name: str,
     bypass_throttle: bool = False,
+    bypass_market_hours: bool = False,
     db: Session = Depends(get_db),
 ):
     """手动触发某只股票的指定 Agent"""
@@ -286,7 +287,11 @@ async def trigger_stock_agent(
     from server import trigger_agent_for_stock
     try:
         result = await trigger_agent_for_stock(
-            agent_name, db_stock, stock_agent_id=sa.id, bypass_throttle=bypass_throttle
+            agent_name,
+            db_stock,
+            stock_agent_id=sa.id,
+            bypass_throttle=bypass_throttle,
+            bypass_market_hours=bypass_market_hours,
         )
         logger.info(f"Agent {agent_name} 执行完成 - {db_stock.symbol}")
         return {
