@@ -46,6 +46,7 @@ class HistoryResponse(BaseModel):
     suggestions: dict | None = (
         None  # 个股建议 {symbol: {action, action_label, reason, should_alert}}
     )
+    news: list[dict] | None = None
     created_at: str
     updated_at: str
 
@@ -79,6 +80,7 @@ def list_history(
             title=r.title or "",
             content=r.content,
             suggestions=r.raw_data.get("suggestions") if r.raw_data else None,
+            news=r.raw_data.get("news") if r.raw_data else None,
             created_at=_format_datetime(r.created_at),
             updated_at=_format_datetime(r.updated_at),
         )
@@ -105,6 +107,7 @@ def get_history_detail(
         title=record.title or "",
         content=record.content,
         suggestions=record.raw_data.get("suggestions") if record.raw_data else None,
+        news=record.raw_data.get("news") if record.raw_data else None,
         created_at=_format_datetime(record.created_at),
         updated_at=_format_datetime(record.updated_at),
     )

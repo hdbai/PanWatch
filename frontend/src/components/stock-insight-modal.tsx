@@ -65,6 +65,12 @@ interface HistoryRecord {
   title: string
   content: string
   suggestions?: Record<string, any> | null
+  news?: Array<{
+    source?: string
+    title?: string
+    publish_time?: string
+    url?: string
+  }> | null
   created_at: string
 }
 
@@ -122,11 +128,18 @@ function formatCompactNumber(value: number | null | undefined): string {
   return n.toFixed(0)
 }
 
-function formatMarketCap(value: number | null | undefined): string {
+function formatMarketCap(value: number | null | undefined, market?: string): string {
   if (value == null) return '--'
   const n = Number(value)
   if (!isFinite(n)) return '--'
+  const m = String(market || '').toUpperCase()
   const abs = Math.abs(n)
+
+  // 腾讯 A 股字段常见为“亿元”口径（如 808 表示 808 亿元）
+  if (m === 'CN' && abs > 0 && abs < 100000) {
+    return `${n.toFixed(2)}亿元`
+  }
+
   if (abs >= 1e8) return `${(n / 1e8).toFixed(2)}亿元`
   if (abs >= 1e4) return `${(n / 1e4).toFixed(2)}万元`
   return `${n.toFixed(0)}元`
@@ -335,6 +348,43 @@ export default function StockInsightModal(props: {
       if ((data || []).length === 0) {
         data = await runQuery({ useName: true, filterRelated: false })
       }
+      if ((data || []).length === 0) {
+        data = await runQuery({ useName: false, filterRelated: false })
+      }
+      // 兜底：实时新闻为空时，回退到 news_digest 历史快照中的新闻列表
+      if ((data || []).length === 0) {
+        const bySymbol = await fetchAPI<HistoryRecord[]>(
+          `/history?agent_name=news_digest&stock_symbol=${encodeURIComponent(symbol)}&limit=1`
+        ).catch(() => [])
+        let rec: HistoryRecord | null = (bySymbol || [])[0] || null
+        if (!rec) {
+          const globals = await fetchAPI<HistoryRecord[]>(
+            `/history?agent_name=news_digest&stock_symbol=*&limit=20`
+          ).catch(() => [])
+          const upperSymbol = symbol.toUpperCase()
+          const name = (resolvedName || '').trim()
+          rec = (globals || []).find((r) => {
+            const sug = r?.suggestions || {}
+            const keys = Object.keys(sug || {})
+            if (keys.includes(symbol) || keys.map(k => k.toUpperCase()).includes(upperSymbol)) return true
+            const text = `${r?.title || ''}\n${r?.content || ''}`.toUpperCase()
+            if (upperSymbol && text.includes(upperSymbol)) return true
+            if (name && `${r?.title || ''}\n${r?.content || ''}`.includes(name)) return true
+            return false
+          }) || null
+        }
+        if (rec?.news && Array.isArray(rec.news)) {
+          data = rec.news
+            .map((n) => ({
+              source: n.source || 'news_digest',
+              source_label: n.source || 'news_digest',
+              title: n.title || '',
+              publish_time: n.publish_time || rec?.analysis_date || '',
+              url: n.url || '',
+            }))
+            .filter((n) => !!n.title)
+        }
+      }
       setNews(data || [])
     } catch {
       setNews([])
@@ -369,26 +419,53 @@ export default function StockInsightModal(props: {
     if (!symbol) return
     try {
       const agents = ['premarket_outlook', 'daily_report', 'news_digest']
-      const results = await Promise.all(
+      const bySymbolResults = await Promise.all(
         agents.map(agent =>
           fetchAPI<HistoryRecord[]>(
             `/history?agent_name=${encodeURIComponent(agent)}&stock_symbol=${encodeURIComponent(symbol)}&limit=1`
           ).catch(() => [])
         )
       )
-      const merged = results
+      let merged = bySymbolResults
         .flatMap(items => items || [])
         .filter(Boolean)
-        .sort((a, b) => {
-          const am = parseToMs(a.created_at || a.analysis_date) || 0
-          const bm = parseToMs(b.created_at || b.analysis_date) || 0
-          return bm - am
-        })
+      // 兼容全局记录（stock_symbol="*"）场景：从最近全局记录中筛选与当前股票相关的报告。
+      if (merged.length === 0) {
+        const globalResults = await Promise.all(
+          agents.map(agent =>
+            fetchAPI<HistoryRecord[]>(
+              `/history?agent_name=${encodeURIComponent(agent)}&stock_symbol=*&limit=20`
+            ).catch(() => [])
+          )
+        )
+        const upperSymbol = symbol.toUpperCase()
+        const name = (resolvedName || '').trim()
+        merged = globalResults
+          .map(items => {
+            const rows = (items || []).filter(Boolean)
+            const hit = rows.find((r) => {
+              const sug = r?.suggestions || {}
+              const keys = Object.keys(sug || {})
+              if (keys.includes(symbol) || keys.map(k => k.toUpperCase()).includes(upperSymbol)) return true
+              const text = `${r?.title || ''}\n${r?.content || ''}`.toUpperCase()
+              if (upperSymbol && text.includes(upperSymbol)) return true
+              if (name && `${r?.title || ''}\n${r?.content || ''}`.includes(name)) return true
+              return false
+            })
+            return hit || null
+          })
+          .filter(Boolean) as HistoryRecord[]
+      }
+      merged = merged.sort((a, b) => {
+        const am = parseToMs(a.created_at || a.analysis_date) || 0
+        const bm = parseToMs(b.created_at || b.analysis_date) || 0
+        return bm - am
+      })
       setReports(merged)
     } catch {
       setReports([])
     }
-  }, [symbol])
+  }, [symbol, resolvedName])
 
   const loadCore = useCallback(async () => {
     if (!symbol) return
@@ -727,7 +804,7 @@ export default function StockInsightModal(props: {
                       <div className="rounded bg-accent/15 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">振幅</div><div className="font-mono">{amplitudePct != null ? `${amplitudePct.toFixed(2)}%` : '--'}</div></div>
                       <div className="rounded bg-accent/15 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">换手率</div><div className="font-mono">{quote?.turnover_rate != null ? `${Number(quote.turnover_rate).toFixed(2)}%` : '--'}</div></div>
                       <div className="rounded bg-accent/15 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">市盈率</div><div className="font-mono">{quote?.pe_ratio != null ? Number(quote.pe_ratio).toFixed(2) : '--'}</div></div>
-                      <div className="rounded bg-accent/15 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">总市值</div><div className="font-mono">{formatMarketCap(quote?.total_market_value)}</div></div>
+                      <div className="rounded bg-accent/15 px-2 py-1.5"><div className="text-[10px] text-muted-foreground">总市值</div><div className="font-mono">{formatMarketCap(quote?.total_market_value, market)}</div></div>
                     </div>
                     <div className="mt-3 border-t border-border/50 pt-3">
                       <div className="text-[11px] text-muted-foreground mb-2">持仓信息</div>
