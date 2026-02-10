@@ -256,7 +256,6 @@ export default function DashboardPage() {
   const [monitorStocks, setMonitorStocks] = useState<MonitorStock[]>([])
   const [scanning, setScanning] = useState(false)
   const [aiScanRunning, setAiScanRunning] = useState(false)
-  const [enableAIAnalysis, setEnableAIAnalysis] = useState(true)
   const scanRequestRef = useRef(0)
 
   // Auto-refresh (持久化到 localStorage)
@@ -600,7 +599,6 @@ export default function DashboardPage() {
     }
 
     // Phase 2: enrich with AI suggestions in background.
-    if (!enableAIAnalysis) return
     setAiScanRunning(true)
     try {
       const aiResult = await fetchAPI<{ stocks: MonitorStock[]; available_funds: number }>('/agents/intraday/scan?analyze=true', { method: 'POST' })
@@ -624,7 +622,7 @@ export default function DashboardPage() {
     } finally {
       if (reqId === scanRequestRef.current) setAiScanRunning(false)
     }
-  }, [hasWatchlist, enableAIAnalysis])
+  }, [hasWatchlist])
 
   const handleRefresh = useCallback(async () => {
     await refreshQuotes()
@@ -863,15 +861,13 @@ export default function DashboardPage() {
                   </Select>
                 )}
               </div>
-              <div className="w-px h-4 bg-border hidden sm:block" />
-              <div className="flex items-center gap-1 md:gap-1.5">
-                <Switch checked={enableAIAnalysis} onCheckedChange={setEnableAIAnalysis} className="scale-90" />
-                <span className="text-[11px] md:text-[12px] text-muted-foreground hidden sm:inline">AI 建议</span>
-              </div>
               {lastRefreshTime && (
-                <span className="text-[9px] md:text-[10px] text-muted-foreground/60 hidden md:inline font-mono">
-                  {lastRefreshTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                </span>
+                <>
+                  <div className="w-px h-4 bg-border hidden sm:block" />
+                  <span className="text-[9px] md:text-[10px] text-muted-foreground/60 hidden md:inline font-mono">
+                    {lastRefreshTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                </>
               )}
             </div>
 

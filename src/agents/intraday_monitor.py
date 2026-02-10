@@ -511,6 +511,53 @@ class IntradayMonitorAgent(BaseAgent):
         result["should_alert"] = result["action"] in {"buy", "add", "reduce", "sell"}
         return result
 
+    def _format_human_readable_content(
+        self, stock: StockData, suggestion: dict, raw_content: str
+    ) -> str:
+        """当模型返回 JSON 时，生成可读通知内容。"""
+        action_label = suggestion.get("action_label") or "观望"
+        signal = suggestion.get("signal") or "无明显新信号"
+        reason = suggestion.get("reason") or "请结合盘面与风控策略审慎判断。"
+        triggers = (
+            suggestion.get("triggers")
+            if isinstance(suggestion.get("triggers"), list)
+            else []
+        )
+        invalidations = (
+            suggestion.get("invalidations")
+            if isinstance(suggestion.get("invalidations"), list)
+            else []
+        )
+        risks = (
+            suggestion.get("risks") if isinstance(suggestion.get("risks"), list) else []
+        )
+        price = (
+            f"{stock.current_price:.2f}" if getattr(stock, "current_price", None) else "N/A"
+        )
+        chg = f"{(stock.change_pct or 0):+.2f}%"
+        lines = [
+            f"{stock.name}（{stock.symbol}）",
+            f"现价：{price}  涨跌：{chg}",
+            f"建议：{action_label}",
+            f"信号：{signal}",
+            f"理由：{reason}",
+        ]
+        if triggers:
+            lines.append("触发条件：")
+            lines.extend([f"- {str(x)}" for x in triggers[:3]])
+        if invalidations:
+            lines.append("失效条件：")
+            lines.extend([f"- {str(x)}" for x in invalidations[:3]])
+        if risks:
+            lines.append("风险提示：")
+            lines.extend([f"- {str(x)}" for x in risks[:3]])
+        # 若本次并非纯 JSON，附上简短原文摘要便于核对
+        if not try_parse_action_json(raw_content):
+            brief = re.sub(r"\s+", " ", (raw_content or "").strip())[:200]
+            if brief:
+                lines.append(f"备注：{brief}")
+        return "\n".join(lines)
+
     async def analyze(self, context: AgentContext, data: dict) -> AnalysisResult:
         """AI 分析并判断是否需要提醒"""
         # 非交易时段跳过
@@ -537,13 +584,17 @@ class IntradayMonitorAgent(BaseAgent):
         # 打印完整 prompt 用于调试
         logger.info(f"=== Prompt for {stock.symbol} ===\n{user_content}")
 
-        content = await context.ai_client.chat(system_prompt, user_content)
+        raw_content = await context.ai_client.chat(system_prompt, user_content)
 
         # 打印 AI 返回结果
-        logger.info(f"=== AI Response for {stock.symbol} ===\n{content}")
+        logger.info(f"=== AI Response for {stock.symbol} ===\n{raw_content}")
 
         # 解析操作建议
-        suggestion = self._parse_suggestion(content)
+        suggestion = self._parse_suggestion(raw_content)
+        content = raw_content
+        # 纯 JSON 输出时，转换为可读通知文本，避免渠道直接推送原始 JSON
+        if try_parse_action_json(raw_content):
+            content = self._format_human_readable_content(stock, suggestion, raw_content)
 
         # 保存到建议池（包含 prompt 上下文）
         save_suggestion(
@@ -557,7 +608,7 @@ class IntradayMonitorAgent(BaseAgent):
             agent_label=self.display_name,
             expires_hours=4,  # 盘中建议 4 小时有效
             prompt_context=user_content,  # 保存 prompt 上下文
-            ai_response=content,  # 保存 AI 原始响应
+            ai_response=raw_content,  # 保存 AI 原始响应
             meta={
                 "quote": {
                     "current_price": stock.current_price,

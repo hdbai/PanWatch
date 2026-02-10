@@ -875,6 +875,9 @@ async def trigger_agent(agent_name: str) -> str:
         raise ValueError(f"Agent {agent_name} 未注册实际实现")
 
     watchlist = load_watchlist_for_agent(agent_name)
+    logger.info(
+        f"[watchlist] Agent={agent_name} count={len(watchlist)} symbols={[s.symbol for s in watchlist]}"
+    )
     if not watchlist:
         return f"Agent {agent_name} 没有关联的自选股"
 

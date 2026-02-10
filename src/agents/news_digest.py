@@ -8,6 +8,7 @@ from pathlib import Path
 from src.agents.base import BaseAgent, AgentContext, AnalysisResult
 from src.collectors.news_collector import NewsCollector, NewsItem
 from src.core.analysis_history import save_analysis
+from src.core.cn_symbol import get_cn_prefix
 from src.core.suggestion_pool import save_suggestion
 from src.core.signals import SignalPackBuilder
 from src.core.signals.structured_output import (
@@ -312,7 +313,7 @@ class NewsDigestAgent(BaseAgent):
                 and sym.isdigit()
                 and len(sym) == 6
             ):
-                prefix = "SH" if sym.startswith("6") or sym.startswith("000") else "SZ"
+                prefix = get_cn_prefix(sym, upper=True)
                 symbol_map[f"{prefix}{sym}"] = sym
                 symbol_map[f"{sym}.{prefix}"] = sym
 
@@ -418,7 +419,7 @@ class NewsDigestAgent(BaseAgent):
                 and sym.isdigit()
                 and len(sym) == 6
             ):
-                prefix = "SH" if sym.startswith("6") or sym.startswith("000") else "SZ"
+                prefix = get_cn_prefix(sym, upper=True)
                 symbol_map[f"{prefix}{sym}"] = sym
                 symbol_map[f"{sym}.{prefix}"] = sym
 
@@ -481,7 +482,11 @@ class NewsDigestAgent(BaseAgent):
         structured = try_extract_tagged_json(content) or {}
         display_content = strip_tagged_json(content)
 
-        stock_names = "、".join(s.name for s in context.watchlist[:5])
+        stock_items = [
+            f"{(s.name or s.symbol).strip()}({s.symbol})"
+            for s in context.watchlist[:5]
+        ]
+        stock_names = "、".join(stock_items) if stock_items else "无股票"
         if len(context.watchlist) > 5:
             stock_names += f" 等{len(context.watchlist)}只"
         title = f"【{self.display_name}】{stock_names}"

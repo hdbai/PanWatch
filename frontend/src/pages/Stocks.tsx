@@ -323,15 +323,12 @@ export default function StocksPage() {
 
   // Alerts / Scanning
   const [scanning, setScanning] = useState(false)
-  const [enableAIAnalysis, setEnableAIAnalysis] = useState(true)  // 是否启用 AI 分析建议
 
   type ViewTab = 'positions' | 'watchlist'
   const [viewTab, setViewTab] = useLocalStorage<ViewTab>('panwatch_stocks_viewTab', 'positions')
 
   // 股票 AI 建议（来自盘中监控 API）
   const [suggestions] = useState<Record<string, StockSuggestionData>>({})
-  const [suggestionsLoading] = useState(false)
-
   // 建议池建议（来自 /suggestions API）
   const [poolSuggestions, setPoolSuggestions] = useState<Record<string, PoolSuggestion>>({})
   const [poolSuggestionsLoading, setPoolSuggestionsLoading] = useState(false)
@@ -755,7 +752,7 @@ export default function StocksPage() {
   const scanAndReload = useCallback(async () => {
     setScanning(true)
     try {
-      const url = enableAIAnalysis ? '/agents/intraday/scan?analyze=true' : '/agents/intraday/scan'
+      const url = '/agents/intraday/scan?analyze=true'
       await fetchAPI(url, { method: 'POST' })
       await loadPoolSuggestions()
       await refreshKlines()
@@ -765,7 +762,7 @@ export default function StocksPage() {
     } finally {
       setScanning(false)
     }
-  }, [enableAIAnalysis, loadPoolSuggestions, refreshKlines])
+  }, [loadPoolSuggestions, refreshKlines])
 
   // 首次加载后，按需刷新 K 线摘要与建议池
   const initialKlineDone = useRef(false)
@@ -1155,7 +1152,7 @@ export default function StocksPage() {
     const key = `${market || 'CN'}:${symbol}`
     // 优先使用建议池的建议（包含来源和时间信息）
     const poolSug = poolSuggestions[symbol]
-    if (poolSug && !poolSug.is_expired) {
+    if (poolSug) {
       const preloadedKline = klineSummaries[key] || (suggestions[symbol]?.kline as any) || null
       return {
         suggestion: {
@@ -1320,19 +1317,21 @@ export default function StocksPage() {
                   </Select>
                 )}
               </div>
-              <div className="w-px h-4 bg-border" />
-              <div className="flex items-center gap-1.5">
-                <Switch checked={enableAIAnalysis} onCheckedChange={setEnableAIAnalysis} className="scale-90" />
-                <span className="text-[11px] text-muted-foreground">AI 建议</span>
-                {poolSuggestionsLoading && (
-                  <span className="w-3 h-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-                )}
-                {!poolSuggestionsLoading && Object.keys(poolSuggestions).length > 0 && (
-                  <span className="text-[10px] text-primary">
-                    {Object.keys(poolSuggestions).length}
-                  </span>
-                )}
-              </div>
+              {(poolSuggestionsLoading || Object.keys(poolSuggestions).length > 0) && (
+                <>
+                  <div className="w-px h-4 bg-border" />
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    {poolSuggestionsLoading && (
+                      <span className="w-3 h-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                    )}
+                    {!poolSuggestionsLoading && Object.keys(poolSuggestions).length > 0 && (
+                      <span className="text-[10px] text-primary">
+                        {Object.keys(poolSuggestions).length}
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
               {lastRefreshTime && (
                 <>
                   <div className="w-px h-4 bg-border" />
@@ -1393,14 +1392,14 @@ export default function StocksPage() {
                 </Select>
               )}
             </div>
-            <div className="w-px h-4 bg-border" />
-            <div className="flex items-center gap-1">
-              <Switch checked={enableAIAnalysis} onCheckedChange={setEnableAIAnalysis} className="scale-90" />
-              <span className="text-[11px] text-muted-foreground">AI 建议</span>
-              {suggestionsLoading && (
-                <span className="w-3 h-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-              )}
-            </div>
+            {poolSuggestionsLoading && (
+              <>
+                <div className="w-px h-4 bg-border" />
+                <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <span className="w-3 h-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                </div>
+              </>
+            )}
           </div>
           {lastRefreshTime && (
             <span className="text-[10px] text-muted-foreground/60">

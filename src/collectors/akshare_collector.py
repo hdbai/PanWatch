@@ -5,6 +5,7 @@ from datetime import datetime
 
 import httpx
 
+from src.core.cn_symbol import get_cn_prefix
 from src.models.market import MarketCode, StockData, IndexData
 
 logger = logging.getLogger(__name__)
@@ -43,20 +44,8 @@ def _tencent_symbol(symbol: str, market: MarketCode = MarketCode.CN) -> str:
     if market == MarketCode.US:
         # 例如：AAPL（Apple）→ usAAPL，NVDA（NVIDIA）→ usNVDA
         return f"us{symbol}"
-    # CN 市场代码前缀映射
-    # 先处理北交所（新版与旧版代码段）
-    if symbol.startswith("920") or symbol.startswith(("83", "87", "88")):
-        # 例如：920001（贝特瑞）→ bj920001，836239（诺思兰德）→ bj836239
-        return "bj" + symbol
-    # 上交所：5/6/900 前缀
-    if symbol.startswith(("5", "6")) or symbol.startswith("900"):
-        # 例如：600519（贵州茅台）→ sh600519，510300（沪深300ETF）→ sh510300，900901（B股）→ sh900901
-        return "sh" + symbol
-    if symbol.startswith(("0", "1", "2", "3")):
-        # 例如：000001（平安银行）→ sz000001，300750（宁德时代）→ sz300750
-        return "sz" + symbol
-    # Fallback：未知前缀按深市处理
-    return "sz" + symbol
+    # CN 市场代码前缀映射（统一函数）
+    return get_cn_prefix(symbol) + symbol
 
 
 def _parse_tencent_line(line: str) -> dict | None:

@@ -301,8 +301,8 @@ async def trigger_agent_endpoint(agent_name: str, db: Session = Depends(get_db))
     from server import trigger_agent
 
     try:
-        # daily_report can take long; do not block HTTP request.
-        if agent_name == "daily_report":
+        # Batch agents can take long; do not block HTTP request.
+        if agent_name in {"daily_report", "premarket_outlook"}:
             _spawn_async_run(
                 trigger_agent, agent_name, name=f"trigger_agent:{agent_name}"
             )

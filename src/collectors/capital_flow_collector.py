@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from src.core.cn_symbol import is_cn_sh
 from src.models.market import MarketCode
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ def _get_eastmoney_secid(symbol: str, market: MarketCode) -> str:
         return f"116.{symbol}"
     if market == MarketCode.US:
         return f"105.{symbol}"
-    prefix = "1" if symbol.startswith("6") or symbol.startswith("000") else "0"
+    prefix = "1" if is_cn_sh(symbol) else "0"
     return f"{prefix}.{symbol}"
 
 

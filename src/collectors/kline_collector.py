@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import httpx
 import time
 
+from src.core.cn_symbol import get_cn_prefix
 from src.models.market import MarketCode
 
 logger = logging.getLogger(__name__)
@@ -167,8 +168,7 @@ def _tencent_symbol(symbol: str, market: MarketCode) -> str:
         return f"hk{symbol}"
     if market == MarketCode.US:
         return f"us{symbol}"
-    prefix = "sh" if symbol.startswith("6") or symbol.startswith("000") else "sz"
-    return prefix + symbol
+    return get_cn_prefix(symbol) + symbol
 
 
 def _calculate_ma(closes: list[float], period: int) -> float | None:

@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from src.core.cn_symbol import get_cn_prefix
+
 logger = logging.getLogger(__name__)
 
 # 截图保存目录
@@ -89,10 +91,7 @@ class ScreenshotCollector:
         if market.upper() == "HK":
             return f"https://stock.finance.sina.com.cn/hkstock/quotes/{symbol}.html"
         # A股
-        if symbol.startswith("6") or symbol.startswith("000"):
-            prefix = "sh"
-        else:
-            prefix = "sz"
+        prefix = get_cn_prefix(symbol)
         return f"https://finance.sina.com.cn/realstock/company/{prefix}{symbol}/nc.shtml"
 
     def _get_eastmoney_url(self, symbol: str, market: str) -> str:
@@ -100,10 +99,7 @@ class ScreenshotCollector:
         if market.upper() == "HK":
             return f"https://quote.eastmoney.com/hk/{symbol}.html"
         # A股
-        if symbol.startswith("6") or symbol.startswith("000"):
-            prefix = "sh" if symbol.startswith("6") else "sz"
-        else:
-            prefix = "sz"
+        prefix = get_cn_prefix(symbol)
         return f"https://quote.eastmoney.com/{prefix}{symbol}.html"
 
     def _get_xueqiu_url(self, symbol: str, market: str) -> str:
@@ -111,10 +107,7 @@ class ScreenshotCollector:
         if market.upper() == "HK":
             return f"https://xueqiu.com/S/{symbol}"
         # A股
-        if symbol.startswith("6") or symbol.startswith("000"):
-            prefix = "SH"
-        else:
-            prefix = "SZ"
+        prefix = get_cn_prefix(symbol, upper=True)
         return f"https://xueqiu.com/S/{prefix}{symbol}"
 
     async def capture(
