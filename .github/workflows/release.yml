@@ -22,9 +22,6 @@ on:
         type: string
         default: 'linux/amd64,linux/arm64'
 
-env:
-  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/panwatch
-
 jobs:
   docker:
     runs-on: ubuntu-latest
@@ -40,6 +37,8 @@ jobs:
       - name: Resolve version
         id: vars
         shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
@@ -62,6 +61,12 @@ jobs:
           echo "push_latest=$push_latest" >> "$GITHUB_OUTPUT"
           echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
 
+          if [[ -z "${DOCKERHUB_USERNAME:-}" ]]; then
+            echo "DOCKERHUB_USERNAME secret is required" >&2
+            exit 1
+          fi
+          echo "image_name=${DOCKERHUB_USERNAME}/panwatch" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -78,7 +83,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_NAME }}
+          images: ${{ steps.vars.outputs.image_name }}
           tags: |
             type=raw,value=${{ steps.vars.outputs.version }}
             type=raw,value=${{ steps.vars.outputs.version_no_v }},enable=${{ steps.vars.outputs.version_no_v != steps.vars.outputs.version }}
@@ -130,8 +135,8 @@ jobs:
 
           {
             echo "## Docker"
-            echo "- $IMAGE_NAME:$current"
-            echo "- $IMAGE_NAME:latest"
+            echo "- ${{ steps.vars.outputs.image_name }}:$current"
+            echo "- ${{ steps.vars.outputs.image_name }}:latest"
             echo ""
             echo "## Commits"
             if [[ -n "$prev" ]]; then
