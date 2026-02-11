@@ -411,9 +411,8 @@ def load_watchlist_for_agent(agent_name: str) -> list[StockConfig]:
         if not stock_ids:
             return []
 
-        stocks = (
-            db.query(Stock).filter(Stock.id.in_(stock_ids), Stock.enabled == True).all()
-        )
+        # 绑定优先：只要绑定了 Agent，就纳入执行范围（不额外受 watchlist enabled 限制）
+        stocks = db.query(Stock).filter(Stock.id.in_(stock_ids)).all()
         result = []
         for s in stocks:
             try:
@@ -464,7 +463,7 @@ def load_portfolio_for_agent(agent_name: str) -> PortfolioInfo:
             position_infos = []
             for pos in positions:
                 stock = pos.stock
-                if not stock or not stock.enabled:
+                if not stock:
                     continue
                 try:
                     market = MarketCode(stock.market)
