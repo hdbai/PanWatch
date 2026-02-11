@@ -286,13 +286,12 @@ export default function AgentsPage() {
     (stock.agents || []).some(a => a.agent_name === agentName)
 
   const getAgentBoundCount = (agentName: string) =>
-    stocks.filter(s => s.enabled && hasAgentBound(s, agentName)).length
+    stocks.filter(s => hasAgentBound(s, agentName)).length
 
   const getBoundStocks = (agentName: string) =>
-    stocks.filter(s => s.enabled && hasAgentBound(s, agentName))
+    stocks.filter(s => hasAgentBound(s, agentName))
 
   const filteredBindStocks = stocks
-    .filter(s => s.enabled)
     .filter(s => {
       const q = bindKeyword.trim().toLowerCase()
       if (!q) return true
@@ -531,7 +530,7 @@ export default function AgentsPage() {
                             ? 'bg-primary/12 border-primary/35 text-primary hover:bg-primary/18'
                             : 'bg-accent/30 border-border/60 text-muted-foreground hover:border-primary/30'
                         }`}
-                        title={`${boundSummary}（已绑定 ${getAgentBoundCount(agent.name)} / ${stocks.filter(s => s.enabled).length}）`}
+                        title={`${boundSummary}（已绑定 ${getAgentBoundCount(agent.name)} / ${stocks.length}）`}
                       >
                         {boundSummary}
                       </button>
@@ -879,7 +878,7 @@ export default function AgentsPage() {
                         }`}
                         title={`${s.name} (${s.symbol})`}
                       >
-                        {saving ? '处理中...' : s.name || s.symbol}
+                        {saving ? '处理中...' : `${s.name || s.symbol}${s.enabled ? '' : '（未启用）'}`}
                       </button>
                     )
                   })}
